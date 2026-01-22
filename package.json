@@ -1,0 +1,66 @@
+{
+  "name": "openmc-vscode-extension",
+  "displayName": "OpenMC Statepoint Inspector",
+  "description": "VSCode extension for inspecting OpenMC statepoint files",
+  "version": "0.1.0",
+  "publisher": "openmc",
+  "engines": {
+    "vscode": "^1.108.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "openmc.openStatepoint",
+        "title": "OpenMC: Open Statepoint File"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "openmc.statepointViewer",
+        "displayName": "OpenMC Statepoint Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.h5"
+          }
+        ],
+        "priority": "option"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "echo 'No linting configured'",
+    "package": "vsce package"
+  },
+  "keywords": [
+    "openmc",
+    "nuclear",
+    "simulation",
+    "hdf5",
+    "statepoint"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Villadslj/openmc-vscode-extension.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "@types/vscode": "^1.108.1",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "h5wasm": "^0.8.11"
+  }
+}
