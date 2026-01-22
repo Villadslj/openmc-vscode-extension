@@ -4,6 +4,12 @@ import * as fs from 'fs';
 import { StatepointParser } from './statepointParser';
 
 export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProvider {
+    // Constants for data visualization
+    private readonly MAX_CHART_DATA_POINTS = 100;
+    private readonly CHART_LABEL_PRECISION = 2;
+    private readonly RESULT_DISPLAY_THRESHOLD = 5;
+    private readonly RESULT_EXPONENTIAL_PRECISION = 4;
+    
     constructor(private readonly context: vscode.ExtensionContext) {}
 
     async openCustomDocument(
@@ -288,7 +294,7 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
         tallies.forEach((tally, index) => {
             if (tally.results && Array.isArray(tally.results) && tally.results.length > 0) {
                 // Only create charts for tallies with reasonable number of data points
-                if (tally.results.length <= 100 && tally.results.every((r: any) => typeof r === 'number')) {
+                if (tally.results.length <= this.MAX_CHART_DATA_POINTS && tally.results.every((r: any) => typeof r === 'number')) {
                     const chartId = `tallyChart${index}`;
                     chartsHtml += `
                     <div class="chart-container">
@@ -346,10 +352,10 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
 
     private formatResults(results: any): string {
         if (Array.isArray(results)) {
-            if (results.length <= 5) {
-                return results.map(r => typeof r === 'number' ? r.toExponential(4) : r).join(', ');
+            if (results.length <= this.RESULT_DISPLAY_THRESHOLD) {
+                return results.map(r => typeof r === 'number' ? r.toExponential(this.RESULT_EXPONENTIAL_PRECISION) : r).join(', ');
             } else {
-                return `${results.length} values (min: ${Math.min(...results).toExponential(4)}, max: ${Math.max(...results).toExponential(4)})`;
+                return `${results.length} values (min: ${Math.min(...results).toExponential(this.RESULT_EXPONENTIAL_PRECISION)}, max: ${Math.max(...results).toExponential(this.RESULT_EXPONENTIAL_PRECISION)})`;
             }
         }
         return String(results);

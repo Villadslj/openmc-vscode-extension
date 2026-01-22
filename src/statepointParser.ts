@@ -10,6 +10,9 @@ export interface StatepointData {
 export class StatepointParser {
     private h5Module: any;
     private initialized: boolean = false;
+    
+    // Constants for formatting
+    private readonly DECIMAL_PRECISION = 6;
 
     constructor() {}
 
@@ -240,7 +243,7 @@ export class StatepointParser {
                     const kCombined = h5file.get('k_combined');
                     const kValue = kCombined.value;
                     if (Array.isArray(kValue) && kValue.length >= 2) {
-                        summary['k_effective'] = `${kValue[0].toFixed(6)} ± ${kValue[1].toFixed(6)}`;
+                        summary['k_effective'] = `${kValue[0].toFixed(this.DECIMAL_PRECISION)} ± ${kValue[1].toFixed(this.DECIMAL_PRECISION)}`;
                     }
                 }
             } catch (e) {
