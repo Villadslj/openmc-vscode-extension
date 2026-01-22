@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { StatepointParser } from './statepointParser';
 
 export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProvider {
@@ -20,6 +21,9 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
     ): Promise<void> {
         webviewPanel.webview.options = {
             enableScripts: true,
+            localResourceRoots: [
+                vscode.Uri.file(path.join(this.context.extensionPath, 'node_modules'))
+            ]
         };
 
         // Load and parse the statepoint file
@@ -27,22 +31,30 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             const parser = new StatepointParser();
             const data = await parser.parseFile(document.uri.fsPath);
             
-            webviewPanel.webview.html = this.getWebviewContent(data, document.uri);
+            webviewPanel.webview.html = this.getWebviewContent(data, document.uri, webviewPanel.webview);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             webviewPanel.webview.html = this.getErrorContent(errorMessage);
         }
     }
 
-    private getWebviewContent(data: any, uri: vscode.Uri): string {
+    private getWebviewContent(data: any, uri: vscode.Uri, webview: vscode.Webview): string {
         const fileName = path.basename(uri.fsPath);
+        
+        // Get Chart.js library from node_modules
+        const chartJsPath = vscode.Uri.file(
+            path.join(this.context.extensionPath, 'node_modules', 'chart.js', 'dist', 'chart.umd.js')
+        );
+        const chartJsUri = webview.asWebviewUri(chartJsPath);
         
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${webview.cspSource} 'unsafe-inline'; style-src ${webview.cspSource} 'unsafe-inline';">
     <title>OpenMC Statepoint Viewer</title>
+    <script src="${chartJsUri}"></script>
     <style>
         body {
             font-family: var(--vscode-font-family);
@@ -120,6 +132,10 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             padding: 15px;
             background-color: var(--vscode-editor-background);
             border-radius: 5px;
+            max-height: 400px;
+        }
+        canvas {
+            max-height: 350px;
         }
     </style>
 </head>
@@ -158,6 +174,7 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             </li>
             `).join('')}
         </ul>
+        ${this.generateTallyCharts(data.tallies)}
     </div>
     ` : `<div class="section"><h2>Tallies</h2><div class="empty-message">No tallies found in this statepoint file</div></div>`}
 
@@ -203,8 +220,14 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
     ` : ''}
 
     <script>
-        // Add interactivity if needed
-        console.log('OpenMC Statepoint Viewer loaded');
+        // Initialize charts after the page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Chart.js configuration for dark mode compatibility
+            Chart.defaults.color = getComputedStyle(document.body).getPropertyValue('--vscode-foreground') || '#cccccc';
+            Chart.defaults.borderColor = getComputedStyle(document.body).getPropertyValue('--vscode-panel-border') || '#444444';
+            
+            console.log('OpenMC Statepoint Viewer loaded');
+        });
     </script>
 </body>
 </html>`;
@@ -256,6 +279,69 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
         return key
             .replace(/_/g, ' ')
             .replace(/\b\w/g, l => l.toUpperCase());
+    }
+
+    private generateTallyCharts(tallies: any[]): string {
+        // Generate charts for tallies with numeric results
+        let chartsHtml = '';
+        
+        tallies.forEach((tally, index) => {
+            if (tally.results && Array.isArray(tally.results) && tally.results.length > 0) {
+                // Only create charts for tallies with reasonable number of data points
+                if (tally.results.length <= 100 && tally.results.every((r: any) => typeof r === 'number')) {
+                    const chartId = `tallyChart${index}`;
+                    chartsHtml += `
+                    <div class="chart-container">
+                        <h3>Tally ${index + 1} - Results Visualization</h3>
+                        <canvas id="${chartId}"></canvas>
+                    </div>
+                    <script>
+                        (function() {
+                            const ctx = document.getElementById('${chartId}').getContext('2d');
+                            new Chart(ctx, {
+                                type: 'bar',
+                                data: {
+                                    labels: ${JSON.stringify(tally.results.map((_: any, i: number) => `Bin ${i + 1}`))},
+                                    datasets: [{
+                                        label: 'Tally Results',
+                                        data: ${JSON.stringify(tally.results)},
+                                        backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                                        borderColor: 'rgba(54, 162, 235, 1)',
+                                        borderWidth: 1
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: true,
+                                    plugins: {
+                                        legend: {
+                                            display: true,
+                                            position: 'top'
+                                        },
+                                        title: {
+                                            display: false
+                                        }
+                                    },
+                                    scales: {
+                                        y: {
+                                            beginAtZero: false,
+                                            ticks: {
+                                                callback: function(value) {
+                                                    return value.toExponential(2);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        })();
+                    </script>
+                    `;
+                }
+            }
+        });
+        
+        return chartsHtml;
     }
 
     private formatResults(results: any): string {
