@@ -8,7 +8,7 @@ export interface StatepointData {
 }
 
 export class StatepointParser {
-    private h5Module: any;
+    private h5wasm: any;
     private initialized: boolean = false;
     
     // Constants for formatting
@@ -18,8 +18,8 @@ export class StatepointParser {
 
     private async ensureInitialized(): Promise<void> {
         if (!this.initialized) {
-            const h5wasm = await import('h5wasm');
-            this.h5Module = await h5wasm.ready;
+            this.h5wasm = await import('h5wasm');
+            await this.h5wasm.ready;
             this.initialized = true;
         }
     }
@@ -32,8 +32,12 @@ export class StatepointParser {
             const fileBuffer = fs.readFileSync(filePath);
             const uint8Array = new Uint8Array(fileBuffer);
 
+            // Create a temporary file in the h5wasm virtual filesystem
+            const tempFileName = '/temp_statepoint.h5';
+            this.h5wasm.FS.writeFile(tempFileName, uint8Array);
+
             // Open the HDF5 file
-            const h5file = new this.h5Module.File(uint8Array, 'r');
+            const h5file = new this.h5wasm.File(tempFileName, 'r');
 
             const data: StatepointData = {
                 generalInfo: {},
@@ -56,8 +60,21 @@ export class StatepointParser {
 
             h5file.close();
 
+            // Clean up the temporary file
+            try {
+                this.h5wasm.FS.unlink(tempFileName);
+            } catch (e) {
+                // Ignore errors when cleaning up
+            }
+
             return data;
         } catch (error) {
+            // Clean up temporary file on error
+            try {
+                this.h5wasm.FS.unlink('/temp_statepoint.h5');
+            } catch (e) {
+                // Ignore errors when cleaning up
+            }
             throw new Error(`Failed to parse statepoint file: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
@@ -66,39 +83,65 @@ export class StatepointParser {
         const info: Record<string, any> = {};
 
         try {
-            // Try to read common OpenMC statepoint attributes
-            const rootAttrs = h5file.attrs;
-            
-            // Common attributes in OpenMC statepoint files
-            const attributesToRead = [
-                'version',
-                'filetype',
+            // Read root-level datasets that contain general info
+            // In OpenMC statepoints, most info is stored as datasets, not attributes
+            const datasetsToRead = [
                 'n_particles',
                 'n_batches',
                 'current_batch',
                 'n_realizations',
                 'n_inactive',
-                'gen_per_batch',
-                'date_and_time',
-                'seed'
+                'generations_per_batch',
+                'seed',
+                'run_mode',
+                'energy_mode'
             ];
 
-            for (const attrName of attributesToRead) {
+            for (const dsName of datasetsToRead) {
                 try {
-                    if (rootAttrs[attrName] !== undefined) {
-                        info[attrName] = rootAttrs[attrName];
+                    const ds = h5file.get(dsName);
+                    if (ds) {
+                        let value = ds.value;
+                        // Handle single-element arrays
+                        if (Array.isArray(value) && value.length === 1) {
+                            value = value[0];
+                        }
+                        // Convert typed arrays
+                        if (value && value.buffer) {
+                            value = Array.from(value);
+                            if (value.length === 1) {
+                                value = value[0];
+                            }
+                        }
+                        info[dsName] = value;
                     }
                 } catch (e) {
-                    // Attribute doesn't exist, continue
+                    // Dataset doesn't exist, continue
                 }
             }
 
-            // If we didn't find standard attributes, list what we have
+            // Also read any root attributes
+            try {
+                const rootAttrs = h5file.attrs;
+                for (const attrName of Object.keys(rootAttrs)) {
+                    try {
+                        if (info[attrName] === undefined) {
+                            info[attrName] = rootAttrs[attrName];
+                        }
+                    } catch (e) {
+                        // Skip attribute
+                    }
+                }
+            } catch (e) {
+                // No attributes
+            }
+
+            // If we didn't find anything, list available keys
             if (Object.keys(info).length === 0) {
-                info['available_attributes'] = Object.keys(rootAttrs).join(', ');
+                info['available_keys'] = h5file.keys().join(', ');
             }
         } catch (error) {
-            info['error'] = `Could not read attributes: ${error instanceof Error ? error.message : String(error)}`;
+            info['error'] = `Could not read info: ${error instanceof Error ? error.message : String(error)}`;
         }
 
         return info;
@@ -112,36 +155,76 @@ export class StatepointParser {
             if (h5file.get('tallies')) {
                 const talliesGroup = h5file.get('tallies');
                 
-                // Iterate through tally IDs
-                for (const tallyKey of Object.keys(talliesGroup.keys)) {
+                // keys() returns an array in h5wasm
+                const tallyKeys = talliesGroup.keys().filter((k: string) => k.startsWith('tally '));
+                
+                for (const tallyKey of tallyKeys) {
                     try {
                         const tallyGroup = talliesGroup.get(tallyKey);
                         const tally: any = {
-                            id: tallyKey
+                            id: tallyKey.replace('tally ', '')
                         };
 
-                        // Read tally attributes and datasets
+                        // Read tally attributes
                         if (tallyGroup.attrs) {
-                            Object.assign(tally, tallyGroup.attrs);
+                            for (const attrName of Object.keys(tallyGroup.attrs)) {
+                                try {
+                                    tally[attrName] = tallyGroup.attrs[attrName];
+                                } catch (e) {
+                                    // Skip attribute
+                                }
+                            }
                         }
 
-                        // Try to read common tally datasets
-                        const datasetsToRead = ['results', 'mean', 'sum', 'sum_sq', 'n_realizations'];
+                        // Read tally datasets (name, estimator, scores, etc.)
+                        const datasetsToRead = ['name', 'estimator', 'n_realizations', 'n_score_bins', 'nuclides', 'score_bins', 'n_filters'];
                         for (const dsName of datasetsToRead) {
                             try {
-                                if (tallyGroup.get(dsName)) {
-                                    const dataset = tallyGroup.get(dsName);
-                                    tally[dsName] = dataset.value;
+                                const ds = tallyGroup.get(dsName);
+                                if (ds) {
+                                    let value = ds.value;
+                                    // Convert typed arrays to regular arrays for better display
+                                    if (value && value.buffer) {
+                                        value = Array.from(value);
+                                    }
+                                    // Decode string arrays
+                                    if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
+                                        tally[dsName] = value.join(', ');
+                                    } else if (Array.isArray(value) && value.length === 1) {
+                                        tally[dsName] = value[0];
+                                    } else {
+                                        tally[dsName] = value;
+                                    }
                                 }
                             } catch (e) {
                                 // Dataset doesn't exist, continue
                             }
                         }
 
-                        // Try to read filters
-                        if (tallyGroup.get('filters')) {
-                            const filtersGroup = tallyGroup.get('filters');
-                            tally.filters = Object.keys(filtersGroup.keys);
+                        // Try to read results (mean and std_dev)
+                        try {
+                            const results = tallyGroup.get('results');
+                            if (results) {
+                                const resultsValue = results.value;
+                                tally.results_shape = results.shape;
+                                // Store summary of results
+                                if (resultsValue && resultsValue.length) {
+                                    tally.results_size = resultsValue.length;
+                                }
+                            }
+                        } catch (e) {
+                            // No results
+                        }
+
+                        // Try to read filter info
+                        try {
+                            const filtersDs = tallyGroup.get('filters');
+                            if (filtersDs) {
+                                const filterIds = filtersDs.value;
+                                tally.filter_ids = Array.from(filterIds);
+                            }
+                        } catch (e) {
+                            // No filters
                         }
 
                         tallies.push(tally);
@@ -162,30 +245,44 @@ export class StatepointParser {
         const meshes: Array<any> = [];
 
         try {
-            // OpenMC statepoint files may have meshes in /meshes group
-            if (h5file.get('meshes')) {
-                const meshesGroup = h5file.get('meshes');
+            // OpenMC statepoint files have meshes in /tallies/meshes group
+            const talliesGroup = h5file.get('tallies');
+            if (talliesGroup && talliesGroup.get('meshes')) {
+                const meshesGroup = talliesGroup.get('meshes');
                 
-                // Iterate through mesh IDs
-                for (const meshKey of Object.keys(meshesGroup.keys)) {
+                // keys() returns an array in h5wasm
+                const meshKeys = meshesGroup.keys().filter((k: string) => k.startsWith('mesh '));
+                
+                for (const meshKey of meshKeys) {
                     try {
                         const meshGroup = meshesGroup.get(meshKey);
                         const mesh: any = {
-                            id: meshKey
+                            id: meshKey.replace('mesh ', '')
                         };
 
                         // Read mesh attributes
                         if (meshGroup.attrs) {
-                            Object.assign(mesh, meshGroup.attrs);
+                            for (const attrName of Object.keys(meshGroup.attrs)) {
+                                try {
+                                    mesh[attrName] = meshGroup.attrs[attrName];
+                                } catch (e) {
+                                    // Skip attribute
+                                }
+                            }
                         }
 
                         // Try to read common mesh datasets
-                        const datasetsToRead = ['dimension', 'lower_left', 'upper_right', 'width', 'type'];
+                        const datasetsToRead = ['dimension', 'lower_left', 'upper_right', 'width', 'type', 'n_dimension'];
                         for (const dsName of datasetsToRead) {
                             try {
-                                if (meshGroup.get(dsName)) {
-                                    const dataset = meshGroup.get(dsName);
-                                    mesh[dsName] = dataset.value;
+                                const ds = meshGroup.get(dsName);
+                                if (ds) {
+                                    let value = ds.value;
+                                    // Convert typed arrays to regular arrays
+                                    if (value && value.buffer) {
+                                        value = Array.from(value);
+                                    }
+                                    mesh[dsName] = value;
                                 }
                             } catch (e) {
                                 // Dataset doesn't exist, continue
