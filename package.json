@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "openmc",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.108.0"
   },
   "categories": [
     "Other"
@@ -46,6 +46,10 @@
     "hdf5",
     "statepoint"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Villadslj/openmc-vscode-extension.git"
+  },
   "author": "",
   "license": "MIT",
   "devDependencies": {
