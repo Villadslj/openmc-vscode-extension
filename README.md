@@ -1,0 +1,1 @@
+# openmc-vscode-extension
