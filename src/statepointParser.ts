@@ -1,10 +1,38 @@
 import * as fs from 'fs';
 
+export interface TallyFilter {
+    id: number;
+    type: string;
+    bins?: number[];
+    energyBins?: number[];
+    cellBins?: number[];
+    meshId?: number;
+    numBins?: number;
+}
+
+export interface TallyResult {
+    mean: number[];
+    stdDev: number[];
+    shape: number[];
+}
+
+export interface TallyData {
+    id: string;
+    name?: string;
+    estimator?: string;
+    scores: string[];
+    filters: TallyFilter[];
+    results?: TallyResult;
+    numScoreBins?: number;
+    nuclides?: string[];
+}
+
 export interface StatepointData {
     generalInfo?: Record<string, any>;
-    tallies?: Array<any>;
+    tallies?: TallyData[];
     meshes?: Array<any>;
     summary?: Record<string, any>;
+    filters?: Record<number, TallyFilter>;
 }
 
 export class StatepointParser {
@@ -50,7 +78,10 @@ export class StatepointParser {
             data.generalInfo = this.extractGeneralInfo(h5file);
 
             // Extract tallies
-            data.tallies = this.extractTallies(h5file);
+            // Extract filters first (used by tallies)
+            data.filters = this.extractFilters(h5file);
+
+            data.tallies = this.extractTallies(h5file, data.filters);
 
             // Extract meshes
             data.meshes = this.extractMeshes(h5file);
@@ -147,8 +178,112 @@ export class StatepointParser {
         return info;
     }
 
-    private extractTallies(h5file: any): Array<any> {
-        const tallies: Array<any> = [];
+    private extractFilters(h5file: any): Record<number, TallyFilter> {
+        const filters: Record<number, TallyFilter> = {};
+
+        try {
+            const talliesGroup = h5file.get('tallies');
+            if (talliesGroup && talliesGroup.get('filters')) {
+                const filtersGroup = talliesGroup.get('filters');
+                const filterKeys = filtersGroup.keys().filter((k: string) => k.startsWith('filter '));
+
+                for (const filterKey of filterKeys) {
+                    try {
+                        const filterGroup = filtersGroup.get(filterKey);
+                        const filterId = parseInt(filterKey.replace('filter ', ''), 10);
+                        
+                        const filter: TallyFilter = {
+                            id: filterId,
+                            type: 'unknown'
+                        };
+
+                        // Read filter type
+                        try {
+                            const typeDs = filterGroup.get('type');
+                            if (typeDs) {
+                                let typeValue = typeDs.value;
+                                if (Array.isArray(typeValue)) {
+                                    typeValue = typeValue[0];
+                                }
+                                filter.type = String(typeValue).trim();
+                            }
+                        } catch (e) {
+                            // Type not found
+                        }
+
+                        // Read number of bins
+                        try {
+                            const nBinsDs = filterGroup.get('n_bins');
+                            if (nBinsDs) {
+                                let nBins = nBinsDs.value;
+                                if (Array.isArray(nBins)) {
+                                    nBins = nBins[0];
+                                }
+                                if (nBins && nBins.buffer) {
+                                    nBins = Array.from(nBins)[0];
+                                }
+                                filter.numBins = Number(nBins);
+                            }
+                        } catch (e) {
+                            // n_bins not found
+                        }
+
+                        // Read bins/energy bins depending on filter type
+                        try {
+                            const binsDs = filterGroup.get('bins');
+                            if (binsDs) {
+                                let binsValue = binsDs.value;
+                                if (binsValue && binsValue.buffer) {
+                                    binsValue = Array.from(binsValue);
+                                }
+                                if (Array.isArray(binsValue)) {
+                                    filter.bins = binsValue.map((v: any) => Number(v));
+                                    // For energy filters, store as energyBins
+                                    if (filter.type.toLowerCase().includes('energy')) {
+                                        filter.energyBins = filter.bins;
+                                    }
+                                    // For cell filters, store as cellBins
+                                    if (filter.type.toLowerCase().includes('cell')) {
+                                        filter.cellBins = filter.bins;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            // bins not found
+                        }
+
+                        // Read mesh ID for mesh filters
+                        try {
+                            const meshDs = filterGroup.get('mesh');
+                            if (meshDs) {
+                                let meshId = meshDs.value;
+                                if (Array.isArray(meshId)) {
+                                    meshId = meshId[0];
+                                }
+                                if (meshId && meshId.buffer) {
+                                    meshId = Array.from(meshId)[0];
+                                }
+                                filter.meshId = Number(meshId);
+                            }
+                        } catch (e) {
+                            // mesh not found
+                        }
+
+                        filters[filterId] = filter;
+                    } catch (e) {
+                        console.error(`Error reading filter ${filterKey}:`, e);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error extracting filters:', error);
+        }
+
+        return filters;
+    }
+
+    private extractTallies(h5file: any, filtersMap: Record<number, TallyFilter>): TallyData[] {
+        const tallies: TallyData[] = [];
 
         try {
             // OpenMC statepoint files typically have tallies in /tallies group
@@ -161,70 +296,145 @@ export class StatepointParser {
                 for (const tallyKey of tallyKeys) {
                     try {
                         const tallyGroup = talliesGroup.get(tallyKey);
-                        const tally: any = {
-                            id: tallyKey.replace('tally ', '')
+                        const tally: TallyData = {
+                            id: tallyKey.replace('tally ', ''),
+                            scores: [],
+                            filters: []
                         };
 
-                        // Read tally attributes
-                        if (tallyGroup.attrs) {
-                            for (const attrName of Object.keys(tallyGroup.attrs)) {
-                                try {
-                                    tally[attrName] = tallyGroup.attrs[attrName];
-                                } catch (e) {
-                                    // Skip attribute
-                                }
-                            }
-                        }
-
-                        // Read tally datasets (name, estimator, scores, etc.)
-                        const datasetsToRead = ['name', 'estimator', 'n_realizations', 'n_score_bins', 'nuclides', 'score_bins', 'n_filters'];
-                        for (const dsName of datasetsToRead) {
-                            try {
-                                const ds = tallyGroup.get(dsName);
-                                if (ds) {
-                                    let value = ds.value;
-                                    // Convert typed arrays to regular arrays for better display
-                                    if (value && value.buffer) {
-                                        value = Array.from(value);
-                                    }
-                                    // Decode string arrays
-                                    if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
-                                        tally[dsName] = value.join(', ');
-                                    } else if (Array.isArray(value) && value.length === 1) {
-                                        tally[dsName] = value[0];
-                                    } else {
-                                        tally[dsName] = value;
-                                    }
-                                }
-                            } catch (e) {
-                                // Dataset doesn't exist, continue
-                            }
-                        }
-
-                        // Try to read results (mean and std_dev)
+                        // Read tally name
                         try {
-                            const results = tallyGroup.get('results');
-                            if (results) {
-                                const resultsValue = results.value;
-                                tally.results_shape = results.shape;
-                                // Store summary of results
-                                if (resultsValue && resultsValue.length) {
-                                    tally.results_size = resultsValue.length;
+                            const nameDs = tallyGroup.get('name');
+                            if (nameDs) {
+                                let nameValue = nameDs.value;
+                                if (Array.isArray(nameValue)) {
+                                    nameValue = nameValue[0];
+                                }
+                                tally.name = String(nameValue).trim();
+                            }
+                        } catch (e) {
+                            // name not found
+                        }
+
+                        // Read estimator
+                        try {
+                            const estimatorDs = tallyGroup.get('estimator');
+                            if (estimatorDs) {
+                                let estimatorValue = estimatorDs.value;
+                                if (Array.isArray(estimatorValue)) {
+                                    estimatorValue = estimatorValue[0];
+                                }
+                                tally.estimator = String(estimatorValue).trim();
+                            }
+                        } catch (e) {
+                            // estimator not found
+                        }
+
+                        // Read number of score bins
+                        try {
+                            const nScoreBinsDs = tallyGroup.get('n_score_bins');
+                            if (nScoreBinsDs) {
+                                let nScoreBins = nScoreBinsDs.value;
+                                if (Array.isArray(nScoreBins)) {
+                                    nScoreBins = nScoreBins[0];
+                                }
+                                if (nScoreBins && nScoreBins.buffer) {
+                                    nScoreBins = Array.from(nScoreBins)[0];
+                                }
+                                tally.numScoreBins = Number(nScoreBins);
+                            }
+                        } catch (e) {
+                            // n_score_bins not found
+                        }
+
+                        // Read scores
+                        try {
+                            const scoresDs = tallyGroup.get('score_bins');
+                            if (scoresDs) {
+                                let scoresValue = scoresDs.value;
+                                if (scoresValue && scoresValue.buffer) {
+                                    scoresValue = Array.from(scoresValue);
+                                }
+                                if (Array.isArray(scoresValue)) {
+                                    tally.scores = scoresValue.map((v: any) => String(v).trim());
                                 }
                             }
                         } catch (e) {
-                            // No results
+                            // scores not found
                         }
 
-                        // Try to read filter info
+                        // Read nuclides
+                        try {
+                            const nuclidesDs = tallyGroup.get('nuclides');
+                            if (nuclidesDs) {
+                                let nuclidesValue = nuclidesDs.value;
+                                if (nuclidesValue && nuclidesValue.buffer) {
+                                    nuclidesValue = Array.from(nuclidesValue);
+                                }
+                                if (Array.isArray(nuclidesValue)) {
+                                    tally.nuclides = nuclidesValue.map((v: any) => String(v).trim());
+                                }
+                            }
+                        } catch (e) {
+                            // nuclides not found
+                        }
+
+                        // Read filter IDs and associate filters
                         try {
                             const filtersDs = tallyGroup.get('filters');
                             if (filtersDs) {
-                                const filterIds = filtersDs.value;
-                                tally.filter_ids = Array.from(filterIds);
+                                let filterIds = filtersDs.value;
+                                if (filterIds && filterIds.buffer) {
+                                    filterIds = Array.from(filterIds);
+                                }
+                                if (Array.isArray(filterIds)) {
+                                    for (const filterId of filterIds) {
+                                        const id = Number(filterId);
+                                        if (filtersMap[id]) {
+                                            tally.filters.push(filtersMap[id]);
+                                        }
+                                    }
+                                }
                             }
                         } catch (e) {
-                            // No filters
+                            // filters not found
+                        }
+
+                        // Read results (mean and std_dev)
+                        try {
+                            const resultsDs = tallyGroup.get('results');
+                            if (resultsDs) {
+                                const resultsValue = resultsDs.value;
+                                const shape = resultsDs.shape;
+                                
+                                if (resultsValue && resultsValue.length > 0) {
+                                    // Results are typically stored as [n_bins, n_scores, 2]
+                                    // where last dimension is [sum, sum_sq] or [mean, std_dev]
+                                    const flatArray = resultsValue.buffer ? Array.from(resultsValue) : resultsValue;
+                                    
+                                    // Calculate mean and std_dev from the results
+                                    // OpenMC stores results as: results[filter_bin, score_bin, 0] = sum
+                                    //                          results[filter_bin, score_bin, 1] = sum_sq
+                                    const totalBins = flatArray.length / 2;
+                                    const mean: number[] = [];
+                                    const stdDev: number[] = [];
+                                    
+                                    for (let i = 0; i < totalBins; i++) {
+                                        const sumVal = flatArray[i * 2];
+                                        const sumSqVal = flatArray[i * 2 + 1];
+                                        mean.push(Number(sumVal));
+                                        stdDev.push(Number(sumSqVal));
+                                    }
+                                    
+                                    tally.results = {
+                                        mean,
+                                        stdDev,
+                                        shape: Array.isArray(shape) ? shape : [shape]
+                                    };
+                                }
+                            }
+                        } catch (e) {
+                            console.error(`Error reading results for ${tallyKey}:`, e);
                         }
 
                         tallies.push(tally);
