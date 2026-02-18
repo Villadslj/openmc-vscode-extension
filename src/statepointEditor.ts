@@ -7,6 +7,8 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
     private readonly MAX_CHART_DATA_POINTS = 500;
     private readonly RESULT_DISPLAY_THRESHOLD = 5;
     private readonly RESULT_EXPONENTIAL_PRECISION = 4;
+    private readonly MAX_TABLE_ROWS = 100;
+    private readonly MAX_INLINE_ENERGY_BINS = 50;
     
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -469,7 +471,7 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                         html += '<div class="energy-bins">';
                         html += '<strong>Energy bins (eV):</strong><br>';
                         const bins = filter.energyBins;
-                        if (bins.length <= 50) {
+                        if (bins.length <= ${this.MAX_INLINE_ENERGY_BINS}) {
                             html += bins.map(function(b) { return b.toExponential(3); }).join(', ');
                         } else {
                             html += bins.slice(0, 10).map(function(b) { return b.toExponential(3); }).join(', ');
@@ -534,7 +536,7 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 html += '<thead><tr><th>Bin</th><th>X Value</th><th>Mean</th><th>Std Dev</th><th>Rel. Error</th></tr></thead>';
                 html += '<tbody>';
                 
-                const maxRows = Math.min(100, tally.results.mean.length);
+                const maxRows = Math.min(${this.MAX_TABLE_ROWS}, tally.results.mean.length);
                 const energyFilter = tally.filters ? tally.filters.find(function(f) { return f.type.toLowerCase().includes('energy'); }) : null;
                 
                 for (let i = 0; i < maxRows; i++) {
