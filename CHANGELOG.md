@@ -2,6 +2,27 @@
 
 All notable changes to the OpenMC VSCode Extension will be documented in this file.
 
+## [0.2.0] - 2026-02-18
+
+### Added
+- **Clickable Tally Items**: Click on any tally to view detailed information
+- **Tally Detail Modal**: Comprehensive view showing:
+  - Basic information (ID, name, estimator, score bins)
+  - Scores and nuclides lists
+  - Filter details with energy bins, cell IDs, mesh associations
+  - Results summary with min/max statistics
+- **Interactive Spectrum Visualization**: 
+  - Multiple chart types (line, bar, scatter)
+  - Logarithmic and linear scale options for both axes
+  - Optional error bars (±σ)
+  - Energy-dependent axis labels when energy filters are present
+- **Results Data Table**: Displays bin index, x-value, mean, standard deviation, and relative error
+- Keyboard navigation support (Escape to close modal)
+
+### Changed
+- Enhanced tally parsing to extract complete filter and results data
+- Improved type safety with new TypeScript interfaces for tally data
+
 ## [0.1.0] - 2024-01-22
 
 ### Added
@@ -28,7 +49,6 @@ All notable changes to the OpenMC VSCode Extension will be documented in this fi
 ## [Unreleased]
 
 ### Planned Features
-- Enhanced plotting options (line charts, scatter plots)
 - 3D mesh visualization
 - Export data to CSV/JSON
 - Compare multiple statepoint files

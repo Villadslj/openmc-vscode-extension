@@ -6,7 +6,13 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
 
 - **Statepoint File Viewer**: Open and inspect OpenMC statepoint files (`.h5`, `.hdf5`)
 - **General Information Display**: View simulation parameters, batch information, and runtime data
-- **Tally Inspection**: Browse all tallies with their IDs, scores, filters, and results
+- **Interactive Tally Inspection**: Click on tallies to view detailed information including:
+  - Spectrum visualization with multiple chart types (line, bar, scatter)
+  - Logarithmic and linear scale options for both axes
+  - Error bars visualization (±σ)
+  - Energy-dependent axis labels when energy filters are present
+  - Detailed filter information (energy bins, cell IDs, mesh associations)
+  - Results data table with mean, standard deviation, and relative error
 - **Mesh Visualization**: Examine mesh definitions including dimensions and spatial bounds
 - **Summary Statistics**: View key simulation metrics like k-effective and entropy
 - **User-Friendly Interface**: Clean, VSCode-themed interface with organized sections
@@ -58,9 +64,26 @@ There are two ways to open statepoint files:
 Once a statepoint file is opened, you'll see:
 
 - **General Information**: Simulation parameters, version, number of particles, batches, etc.
-- **Tallies**: List of all tallies with their properties and results
+- **Tallies**: List of all tallies with their properties and results (click to see detailed view)
 - **Meshes**: Details about mesh definitions used in the simulation
 - **Summary Statistics**: Key results like k-effective value
+
+### Tally Detail View
+
+Click on any tally to open a detailed modal view with:
+
+- **Basic Information**: Tally ID, name, estimator type, and number of score bins
+- **Scores and Nuclides**: Lists of score types and nuclides being tracked
+- **Filter Details**: Information about filters applied to the tally, including:
+  - Energy filter bins (in eV)
+  - Cell filter IDs
+  - Mesh filter associations
+- **Spectrum Visualization**: Interactive chart with controls for:
+  - Chart type (line, bar, scatter)
+  - Y-axis scale (logarithmic/linear)
+  - X-axis scale (logarithmic/linear)
+  - Error bars toggle
+- **Results Data Table**: Detailed table showing bin index, x-value, mean, standard deviation, and relative error
 
 ## Requirements
 
