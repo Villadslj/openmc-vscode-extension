@@ -12,3 +12,4 @@ dist/
 .env
 .env.local
 test/
+statepoint.500.h5
