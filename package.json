@@ -18,6 +18,10 @@
       {
         "command": "openmc.openStatepoint",
         "title": "OpenMC: Open Statepoint File"
+      },
+      {
+        "command": "openmc.openSurfaceSource",
+        "title": "OpenMC: Open Surface Source File"
       }
     ],
     "customEditors": [
@@ -30,6 +34,16 @@
           }
         ],
         "priority": "option"
+      },
+      {
+        "viewType": "openmc.surfaceSourceViewer",
+        "displayName": "OpenMC Surface Source Viewer",
+        "selector": [
+          {
+            "filenamePattern": "surface_source.h5"
+          }
+        ],
+        "priority": "default"
       }
     ]
   },

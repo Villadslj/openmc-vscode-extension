@@ -5,6 +5,7 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
 ## Features
 
 - **Statepoint File Viewer**: Open and inspect OpenMC statepoint files (`.h5`, `.hdf5`)
+- **Surface Source File Viewer**: Open and inspect OpenMC `surface_source.h5` files with energy spectra
 - **General Information Display**: View simulation parameters, batch information, and runtime data
 - **Interactive Tally Inspection**: Click on tallies to view detailed information including:
   - Spectrum visualization with multiple chart types (line, bar, scatter)
@@ -59,7 +60,19 @@ There are two ways to open statepoint files:
    - Select "Open With..."
    - Choose "OpenMC Statepoint Viewer"
 
-### Viewing Information
+### Opening Surface Source Files
+
+Surface source files (`surface_source.h5`) are detected automatically when opened:
+
+1. **Auto-open**: Files named `surface_source.h5` open in the Surface Source Viewer by default when double-clicked in the file explorer.
+2. **Command Palette**: Press `Ctrl+Shift+P`, type `OpenMC: Open Surface Source File`, and select the file.
+3. **Open With**: Right-click any `.h5` file → `Open With...` → `OpenMC Surface Source Viewer`.
+
+The Surface Source Viewer shows:
+- **Summary**: Total particle count broken down by neutron, photon, and other types.
+- **Neutron Energy Spectrum**: 100-bin log-spaced histogram from 1×10⁻⁵ eV to 20 MeV.
+- **Photon Energy Spectrum**: Same range and resolution.
+- **Interactive controls**: Toggle logarithmic/linear scale on each axis.
 
 Once a statepoint file is opened, you'll see:
 

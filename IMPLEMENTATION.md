@@ -6,9 +6,10 @@ This VSCode extension provides a comprehensive viewer for OpenMC statepoint file
 ## Key Features Implemented
 
 ### 1. Custom Editor for HDF5 Files
-- Registers a custom editor for `.h5` and `.hdf5` files
+- Registers custom editors for `.h5` and `.hdf5` files
 - Option to open files via command palette or context menu
-- Automatically parses OpenMC statepoint file structure
+- Automatically parses OpenMC statepoint and surface source file structures
+- Content-based file-type detection (`source_bank` dataset → surface source file)
 
 ### 2. Data Extraction and Parsing
 - **HDF5 Parsing**: Uses h5wasm library for reading HDF5 files
@@ -29,7 +30,15 @@ This VSCode extension provides a comprehensive viewer for OpenMC statepoint file
 - **Scientific Notation**: Proper formatting for nuclear data
 - **Interactive Charts**: Hover to see exact values
 
-### 5. Security Features
+### 5. Surface Source File Viewer (new)
+- **Auto-detection**: Identifies `surface_source.h5` files by the presence of a `source_bank` dataset
+- **Dedicated editor**: Registered as the default editor for `surface_source.h5` filename pattern
+- **Energy spectra**: Logarithmic energy histogram (100 bins, 1×10⁻⁵ eV – 2×10⁷ eV) for neutrons and photons
+- **Interactive charts**: Toggle between log/linear scales on both axes
+- **Summary statistics**: Total particle counts broken down by neutron / photon / other
+- **Command palette**: `OpenMC: Open Surface Source File` command
+
+### 6. Security Features
 - **Content Security Policy**: Strict CSP headers for webview
 - **Local Dependencies**: No external CDN dependencies
 - **Vulnerability Scanning**: Passed dependency and CodeQL checks
@@ -37,12 +46,14 @@ This VSCode extension provides a comprehensive viewer for OpenMC statepoint file
 
 ## Technical Implementation
 
-### Architecture
+### Technical Architecture
 ```
 src/
-├── extension.ts          # Extension activation and registration
-├── statepointEditor.ts   # Custom editor provider with webview
-└── statepointParser.ts   # HDF5 file parsing logic
+├── extension.ts             # Extension activation and registration
+├── statepointEditor.ts      # Custom editor provider – statepoint files
+├── statepointParser.ts      # HDF5 parsing for statepoint files
+├── surfaceSourceEditor.ts   # Custom editor provider – surface source files
+└── surfaceSourceParser.ts   # HDF5 parsing for surface source files
 ```
 
 ### Dependencies
