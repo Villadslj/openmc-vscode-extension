@@ -205,13 +205,13 @@ export class SurfaceSourceEditorProvider implements vscode.CustomReadonlyEditorP
         <h2>🔵 Neutron Energy Spectrum (${data.neutronSpectrum.totalParticles.toLocaleString()} particles)</h2>
         <div class="chart-controls">
             <label>Y-Axis:
-                <select id="neutronYScale" onchange="renderChart('neutron')">
+                <select id="neutronYScale">
                     <option value="logarithmic">Logarithmic</option>
                     <option value="linear">Linear</option>
                 </select>
             </label>
             <label>X-Axis:
-                <select id="neutronXScale" onchange="renderChart('neutron')">
+                <select id="neutronXScale">
                     <option value="logarithmic">Logarithmic</option>
                     <option value="linear">Linear</option>
                 </select>
@@ -227,13 +227,13 @@ export class SurfaceSourceEditorProvider implements vscode.CustomReadonlyEditorP
         <h2>🔴 Photon Energy Spectrum (${data.photonSpectrum.totalParticles.toLocaleString()} particles)</h2>
         <div class="chart-controls">
             <label>Y-Axis:
-                <select id="photonYScale" onchange="renderChart('photon')">
+                <select id="photonYScale">
                     <option value="logarithmic">Logarithmic</option>
                     <option value="linear">Linear</option>
                 </select>
             </label>
             <label>X-Axis:
-                <select id="photonXScale" onchange="renderChart('photon')">
+                <select id="photonXScale">
                     <option value="logarithmic">Logarithmic</option>
                     <option value="linear">Linear</option>
                 </select>
@@ -256,6 +256,16 @@ export class SurfaceSourceEditorProvider implements vscode.CustomReadonlyEditorP
 
             renderChart('neutron');
             renderChart('photon');
+
+            // Attach scale-change event listeners (avoids inline onchange attributes)
+            ['neutronYScale', 'neutronXScale'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) { el.addEventListener('change', function() { renderChart('neutron'); }); }
+            });
+            ['photonYScale', 'photonXScale'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) { el.addEventListener('change', function() { renderChart('photon'); }); }
+            });
         });
 
         function midpoints(edges) {
@@ -290,19 +300,16 @@ export class SurfaceSourceEditorProvider implements vscode.CustomReadonlyEditorP
             const xMids = midpoints(spectrum.binEdges);
             const counts = spectrum.counts;
 
-            // For log y-scale, filter out zero bins (Chart.js can't plot log(0))
-            let xData = xMids;
-            let yData = counts;
-            if (yScale === 'logarithmic') {
-                const filtered = xMids.map((x, i) => ({ x, y: counts[i] }))
-                                      .filter(function(p) { return p.y > 0; });
-                xData = filtered.map(function(p) { return p.x; });
-                yData = filtered.map(function(p) { return p.y; });
+            // Build data points in a single pass; skip zero bins for log y-scale
+            const dataPoints = [];
+            for (let i = 0; i < xMids.length; i++) {
+                if (yScale === 'logarithmic' && counts[i] === 0) { continue; }
+                dataPoints.push({ x: xMids[i], y: counts[i] });
             }
 
             const datasets = [{
                 label: (type === 'neutron' ? 'Neutron' : 'Photon') + ' Count',
-                data: xData.map(function(x, i) { return { x: x, y: yData[i] }; }),
+                data: dataPoints,
                 backgroundColor: color + '0.5)',
                 borderColor:     color + '1)',
                 borderWidth: 1.5,

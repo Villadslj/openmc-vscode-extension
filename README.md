@@ -70,7 +70,7 @@ Surface source files (`surface_source.h5`) are detected automatically when opene
 
 The Surface Source Viewer shows:
 - **Summary**: Total particle count broken down by neutron, photon, and other types.
-- **Neutron Energy Spectrum**: 100-bin log-spaced histogram from 1×10⁻⁵ eV to 20 MeV.
+- **Neutron Energy Spectrum**: 100-bin log-spaced histogram from 1×10⁻⁵ eV to 2×10⁷ eV (20 MeV).
 - **Photon Energy Spectrum**: Same range and resolution.
 - **Interactive controls**: Toggle logarithmic/linear scale on each axis.
 
