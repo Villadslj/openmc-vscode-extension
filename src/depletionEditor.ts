@@ -27,6 +27,13 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
 
         try {
             const parser = new DepletionParser();
+            if (!(await parser.isDepletionFile(document.uri.fsPath))) {
+                webviewPanel.webview.html = this.getErrorContent(
+                    `"${path.basename(document.uri.fsPath)}" is not an OpenMC depletion results file. ` +
+                    `If it is a statepoint file, open it with the "OpenMC Statepoint Viewer" instead.`
+                );
+                return;
+            }
             const data = await parser.parseFile(document.uri.fsPath);
             webviewPanel.webview.html = this.getWebviewContent(data, document.uri, webviewPanel.webview);
         } catch (error) {
@@ -54,7 +61,7 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
                 <td>${step.index}</td>
                 <td>${this.formatNumber(step.time)}</td>
                 <td>${this.formatNumber(step.timeDays)}</td>
-                <td>${step.keff !== undefined ? this.formatFixed(step.keff) + (step.keffStdDev ? ' ± ' + this.formatFixed(step.keffStdDev) : '') : '-'}</td>
+                <td>${step.keff !== undefined && isFinite(step.keff) ? this.formatFixed(step.keff) + (step.keffStdDev ? ' ± ' + this.formatFixed(step.keffStdDev) : '') : '-'}</td>
                 <td>${step.sourceRate !== undefined ? this.formatNumber(step.sourceRate) : '-'}</td>
                 <td>${step.depletionTime !== undefined ? this.formatNumber(step.depletionTime) : '-'}</td>
             </tr>`).join('');

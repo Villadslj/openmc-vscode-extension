@@ -12,4 +12,5 @@ dist/
 .env
 .env.local
 test/
-statepoint.500.h5
+
+test_data/depletion_results.h5

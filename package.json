@@ -2,7 +2,7 @@
   "name": "openmc-vscode-extension",
   "displayName": "OpenMC Statepoint Inspector",
   "description": "VSCode extension for inspecting OpenMC statepoint files",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "publisher": "openmc",
   "engines": {
     "vscode": "^1.108.0",
@@ -40,13 +40,10 @@
         "displayName": "OpenMC Depletion Results Viewer",
         "selector": [
           {
-            "filenamePattern": "*depletion_results*.h5"
-          },
-          {
-            "filenamePattern": "*.h5"
+            "filenamePattern": "*depletion*.h5"
           }
         ],
-        "priority": "option"
+        "priority": "default"
       }
     ]
   },

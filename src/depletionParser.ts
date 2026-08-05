@@ -57,8 +57,9 @@ export class DepletionParser {
             const h5file = new this.h5wasm.File(tempFileName, 'r');
             try {
                 const fileType = this.readAttr(h5file, 'filetype');
-                if (typeof fileType === 'string' && fileType.includes('depletion')) {
-                    return true;
+                if (typeof fileType === 'string' && fileType.length > 0) {
+                    // A self-declared file type is authoritative in both directions.
+                    return fileType.includes('depletion');
                 }
                 const keys: string[] = h5file.keys();
                 return keys.includes('number') && keys.includes('nuclides') && keys.includes('materials');
@@ -325,8 +326,13 @@ export class DepletionParser {
                 // Last two entries of the row are (k, std dev), also for legacy
                 // files that carry an extra stage dimension.
                 const rowStart = i * eigCols;
-                step.keff = eigenvalues[rowStart];
-                step.keffStdDev = eigCols > 1 ? eigenvalues[rowStart + 1] : undefined;
+                // Fixed-source and decay-only runs store NaN eigenvalues.
+                if (isFinite(eigenvalues[rowStart])) {
+                    step.keff = eigenvalues[rowStart];
+                    step.keffStdDev = eigCols > 1 && isFinite(eigenvalues[rowStart + 1])
+                        ? eigenvalues[rowStart + 1]
+                        : undefined;
+                }
             }
             if (rates.length > i * rateCols) {
                 step.sourceRate = rates[i * rateCols];

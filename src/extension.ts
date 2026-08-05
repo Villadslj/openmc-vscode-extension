@@ -6,15 +6,17 @@ import { DepletionParser } from './depletionParser';
 export function activate(context: vscode.ExtensionContext) {
     console.log('OpenMC Statepoint Inspector is now active');
 
-    // Register the custom editor providers
-    const provider = new StatepointEditorProvider(context);
-    context.subscriptions.push(
-        vscode.window.registerCustomEditorProvider('openmc.statepointViewer', provider)
-    );
-
     const depletionProvider = new DepletionEditorProvider(context);
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider('openmc.depletionViewer', depletionProvider)
+    );
+
+    // Register the custom editor providers. The statepoint provider falls back
+    // to the depletion provider when the opened file turns out to be depletion
+    // results, because both editors are registered for "*.h5".
+    const provider = new StatepointEditorProvider(context, depletionProvider);
+    context.subscriptions.push(
+        vscode.window.registerCustomEditorProvider('openmc.statepointViewer', provider)
     );
 
     // Register command to open statepoint files
