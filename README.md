@@ -15,6 +15,12 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
   - Results data table with mean, standard deviation, and relative error
 - **Mesh Visualization**: Examine mesh definitions including dimensions and spatial bounds
 - **Summary Statistics**: View key simulation metrics like k-effective and entropy
+- **Depletion Results Viewer**: Open and inspect OpenMC depletion results files (e.g. `depletion_results.h5`) to see:
+  - Overview: format version, number of time steps, total depletion time, materials, nuclides and tracked reactions
+  - Time step table with time (s and days), k-effective ± σ, source rate and depletion (wall-clock) time
+  - k-effective evolution chart
+  - Material composition at any time step (atoms, atom density in atom/b-cm, and atom fraction)
+  - Per-nuclide evolution chart across the depletion time steps
 - **User-Friendly Interface**: Clean, VSCode-themed interface with organized sections
 
 ## Installation
@@ -59,6 +65,18 @@ There are two ways to open statepoint files:
    - Select "Open With..."
    - Choose "OpenMC Statepoint Viewer"
 
+### Opening Depletion Results Files
+
+1. **Command Palette Method**:
+   - Press `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (Mac)
+   - Type "OpenMC: Open Depletion Results File"
+   - Select your `depletion_results.h5` file
+
+2. **File Explorer Method**:
+   - Right-click on the `.h5` file in the VSCode file explorer
+   - Select "Open With..."
+   - Choose "OpenMC Depletion Results Viewer"
+
 ### Viewing Information
 
 Once a statepoint file is opened, you'll see:
@@ -88,7 +106,7 @@ Click on any tally to open a detailed modal view with:
 ## Requirements
 
 - Visual Studio Code 1.75.0 or higher
-- OpenMC statepoint files in HDF5 format
+- OpenMC statepoint or depletion results files in HDF5 format
 
 ## Extension Settings
 

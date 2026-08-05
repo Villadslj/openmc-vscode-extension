@@ -18,6 +18,10 @@
       {
         "command": "openmc.openStatepoint",
         "title": "OpenMC: Open Statepoint File"
+      },
+      {
+        "command": "openmc.openDepletionResults",
+        "title": "OpenMC: Open Depletion Results File"
       }
     ],
     "customEditors": [
@@ -25,6 +29,19 @@
         "viewType": "openmc.statepointViewer",
         "displayName": "OpenMC Statepoint Viewer",
         "selector": [
+          {
+            "filenamePattern": "*.h5"
+          }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "openmc.depletionViewer",
+        "displayName": "OpenMC Depletion Results Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*depletion_results*.h5"
+          },
           {
             "filenamePattern": "*.h5"
           }
@@ -45,7 +62,8 @@
     "nuclear",
     "simulation",
     "hdf5",
-    "statepoint"
+    "statepoint",
+    "depletion"
   ],
   "repository": {
     "type": "git",
