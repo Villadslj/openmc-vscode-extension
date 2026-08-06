@@ -20,7 +20,8 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
   - Time step table with time (s and days), k-effective ± σ, source rate and depletion (wall-clock) time
   - k-effective evolution chart
   - Material composition at any time step (atoms, atom density in atom/b-cm, and atom fraction)
-  - Per-nuclide evolution chart across the depletion time steps
+  - Nuclide search in both the composition table and the evolution chart — filter by element (`Pu`), mass number (`137`) or full name (`Cs137`), and combine several terms
+  - Evolution chart that overlays multiple nuclides at once, with an optional logarithmic axis
 - **User-Friendly Interface**: Clean, VSCode-themed interface with organized sections
 
 ## Installation
@@ -73,9 +74,22 @@ There are two ways to open statepoint files:
    - Select your `depletion_results.h5` file
 
 2. **File Explorer Method**:
-   - Right-click on the `.h5` file in the VSCode file explorer
-   - Select "Open With..."
-   - Choose "OpenMC Depletion Results Viewer"
+   - Files whose name contains `depletion` (e.g. `depletion_results.h5`) open in the depletion viewer directly
+   - For other names, right-click the `.h5` file, select "Open With..." and choose "OpenMC Statepoint Viewer" — depletion files are detected from their contents and shown in the depletion viewer automatically
+
+### Filtering Nuclides
+
+Both the **Material Composition** table and the **Nuclide Evolution** chart have a search box:
+
+| Query | Matches |
+| --- | --- |
+| `Pu` | every plutonium isotope (element symbol prefix) |
+| `137` | every nuclide with mass number 137 (`Cs137`, `Ba137`, `Xe137`, …) |
+| `Cs137` | that nuclide and its metastable states |
+| `Am242_m1` | only that metastable state |
+| `U235 Pu239 Cs137` | any of the listed nuclides (terms are separated by spaces or commas) |
+
+In **Nuclide Evolution**, tick any number of nuclides to overlay them on the chart, use **Add matching** to add the current search results in one go, and remove a nuclide by clicking the `×` on its chip.
 
 ### Viewing Information
 
