@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { StatepointParser, TallyData, TallyFilter, StatepointData } from './statepointParser';
+import { DepletionParser } from './depletionParser';
+import { DepletionEditorProvider } from './depletionEditor';
 
 export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProvider {
     // Constants for data visualization
@@ -10,7 +12,10 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
     private readonly MAX_TABLE_ROWS = 100;
     private readonly MAX_INLINE_ENERGY_BINS = 50;
     
-    constructor(private readonly context: vscode.ExtensionContext) {}
+    constructor(
+        private readonly context: vscode.ExtensionContext,
+        private readonly depletionProvider?: DepletionEditorProvider
+    ) {}
 
     async openCustomDocument(
         uri: vscode.Uri,
@@ -31,6 +36,22 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 vscode.Uri.file(path.join(this.context.extensionPath, 'node_modules'))
             ]
         };
+
+        // Both viewers are registered for "*.h5", so the file contents decide
+        // which one actually renders. Depletion results are handed over to the
+        // depletion viewer instead of being shown as an empty statepoint.
+        if (this.depletionProvider) {
+            const probe = new DepletionParser();
+            let isDepletion = false;
+            try {
+                isDepletion = await probe.isDepletionFile(document.uri.fsPath);
+            } catch (e) {
+                isDepletion = false;
+            }
+            if (isDepletion) {
+                return this.depletionProvider.resolveCustomEditor(document, webviewPanel, token);
+            }
+        }
 
         // Load and parse the statepoint file
         try {

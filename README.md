@@ -15,6 +15,13 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
   - Results data table with mean, standard deviation, and relative error
 - **Mesh Visualization**: Examine mesh definitions including dimensions and spatial bounds
 - **Summary Statistics**: View key simulation metrics like k-effective and entropy
+- **Depletion Results Viewer**: Open and inspect OpenMC depletion results files (e.g. `depletion_results.h5`) to see:
+  - Overview: format version, number of time steps, total depletion time, materials, nuclides and tracked reactions
+  - Time step table with time (s and days), k-effective ± σ, source rate and depletion (wall-clock) time
+  - k-effective evolution chart
+  - Material composition at any time step (atoms, atom density in atom/b-cm, and atom fraction)
+  - Nuclide search in both the composition table and the evolution chart — filter by element (`Pu`), mass number (`137`) or full name (`Cs137`), and combine several terms
+  - Evolution chart that overlays multiple nuclides at once, with an optional logarithmic axis
 - **User-Friendly Interface**: Clean, VSCode-themed interface with organized sections
 
 ## Installation
@@ -59,6 +66,31 @@ There are two ways to open statepoint files:
    - Select "Open With..."
    - Choose "OpenMC Statepoint Viewer"
 
+### Opening Depletion Results Files
+
+1. **Command Palette Method**:
+   - Press `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (Mac)
+   - Type "OpenMC: Open Depletion Results File"
+   - Select your `depletion_results.h5` file
+
+2. **File Explorer Method**:
+   - Files whose name contains `depletion` (e.g. `depletion_results.h5`) open in the depletion viewer directly
+   - For other names, right-click the `.h5` file, select "Open With..." and choose "OpenMC Statepoint Viewer" — depletion files are detected from their contents and shown in the depletion viewer automatically
+
+### Filtering Nuclides
+
+Both the **Material Composition** table and the **Nuclide Evolution** chart have a search box:
+
+| Query | Matches |
+| --- | --- |
+| `Pu` | every plutonium isotope (element symbol prefix) |
+| `137` | every nuclide with mass number 137 (`Cs137`, `Ba137`, `Xe137`, …) |
+| `Cs137` | that nuclide and its metastable states |
+| `Am242_m1` | only that metastable state |
+| `U235 Pu239 Cs137` | any of the listed nuclides (terms are separated by spaces or commas) |
+
+In **Nuclide Evolution**, tick any number of nuclides to overlay them on the chart, use **Add matching** to add the current search results in one go, and remove a nuclide by clicking the `×` on its chip.
+
 ### Viewing Information
 
 Once a statepoint file is opened, you'll see:
@@ -88,7 +120,7 @@ Click on any tally to open a detailed modal view with:
 ## Requirements
 
 - Visual Studio Code 1.75.0 or higher
-- OpenMC statepoint files in HDF5 format
+- OpenMC statepoint or depletion results files in HDF5 format
 
 ## Extension Settings
 
