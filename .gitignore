@@ -3,7 +3,13 @@ out/
 dist/
 *.vsix
 .vscode-test/
-.vscode/
+
+# Keep shared debug/build configuration, ignore personal editor state
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+
 *.log
 .DS_Store
 *.swp
@@ -11,6 +17,6 @@ dist/
 *~
 .env
 .env.local
-test/
 
-test_data/depletion_results.h5
+# Large sample data used for manual testing (not distributed)
+test_data/*.h5

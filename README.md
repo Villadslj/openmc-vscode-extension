@@ -119,7 +119,8 @@ Click on any tally to open a detailed modal view with:
 
 ## Requirements
 
-- Visual Studio Code 1.75.0 or higher
+- Visual Studio Code 1.108.0 or higher
+- Node.js 18 or higher (only needed to build from source)
 - OpenMC statepoint or depletion results files in HDF5 format
 
 ## Extension Settings
@@ -145,8 +146,12 @@ npm run package
 
 ### Running in Development
 1. Open the project in VSCode
-2. Press F5 to launch the extension in a new Extension Development Host window
-3. Test the extension with sample statepoint files
+2. Run `npm install` if you have not already
+3. Press F5 to launch the **Run Extension** configuration in a new Extension Development Host window
+4. Test the extension with sample statepoint files
+
+The `F5` launch compiles the extension first via the `npm: compile` task. Use `npm run watch` in a
+terminal if you prefer incremental rebuilds while the host window stays open.
 
 ## Contributing
 

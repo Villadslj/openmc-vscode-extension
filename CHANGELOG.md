@@ -2,6 +2,19 @@
 
 All notable changes to the OpenMC VSCode Extension will be documented in this file.
 
+## [0.3.0] - 2026-08-05
+
+### Added
+- **Depletion Results Viewer**: overview, time step table, k-effective chart, material composition and nuclide evolution for OpenMC depletion results files
+- **Nuclide Search**: filter the Material Composition table and the Nuclide Evolution chart by element (`Pu`), mass number (`137`), full name (`Cs137`) or several terms at once (`U235 Pu239`)
+- **Multi-Nuclide Evolution**: overlay any number of nuclides on the evolution chart, with an "Add matching" bulk action, removable chips and an optional logarithmic axis
+- **Hide zero** toggle and adjustable row limit for the composition table
+
+### Fixed
+- Depletion files no longer open in the statepoint viewer: file type is detected from the file contents, so it works regardless of filename or `workbench.editorAssociations`
+- `NaN` eigenvalues (fixed-source and decay-only runs) are reported as `-` instead of `NaN`
+- `test_data/` is no longer bundled into the published `.vsix`
+
 ## [0.2.0] - 2026-02-18
 
 ### Added
