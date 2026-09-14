@@ -13,6 +13,12 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
   - Energy-dependent axis labels when energy filters are present
   - Detailed filter information (energy bins, cell IDs, mesh associations)
   - Results data table with mean, standard deviation, and relative error
+- **2D Mesh Slice Histograms**: View mesh tallies as a 2D heatmap with:
+  - Selectable coordinate plane (XY, XZ, YZ) and slice index along the remaining axis
+  - Score, nuclide and energy/other filter bin selection
+  - Optional normalization by mesh element volume
+  - A user-defined scale factor (normalization constant)
+  - Linear or logarithmic colour scale with colour bar, plus hover tooltips showing coordinates, value, σ and relative error
 - **Mesh Visualization**: Examine mesh definitions including dimensions and spatial bounds
 - **Summary Statistics**: View key simulation metrics like k-effective and entropy
 - **Depletion Results Viewer**: Open and inspect OpenMC depletion results files (e.g. `depletion_results.h5`) to see:
@@ -115,6 +121,14 @@ Click on any tally to open a detailed modal view with:
   - Y-axis scale (logarithmic/linear)
   - X-axis scale (logarithmic/linear)
   - Error bars toggle
+- **Mesh Slice (2D)**: Shown for tallies with a mesh filter (regular or rectilinear meshes with at least two axes of more than one element):
+  - **Plane**: choose XY, XZ or YZ; only planes with more than one element on both axes are offered
+  - **Slice**: choose the index along the remaining axis, labelled with its physical coordinate range
+  - **Filter/nuclide/score selectors**: shown whenever the tally has more than one bin for them, so a single 2D field is displayed
+  - **Normalize by volume**: divides each bin by its mesh element volume (cm³, or cm² for 2D meshes)
+  - **Scale factor**: an arbitrary multiplier applied after normalization (invalid input falls back to 1)
+  - **Colour scale**: linear or logarithmic, with a colour bar and min/max readout; non-positive bins are greyed out on a logarithmic scale
+  - Hover any cell for its indices, physical centre coordinates, value, standard deviation and relative error
 - **Results Data Table**: Detailed table showing bin index, x-value, mean, standard deviation, and relative error
 
 ## Requirements
