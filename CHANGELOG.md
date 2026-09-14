@@ -2,6 +2,17 @@
 
 All notable changes to the OpenMC VSCode Extension will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **2D Mesh Slice Histogram**: mesh tallies can now be viewed as a 2D heatmap with selectable coordinate plane (XY/XZ/YZ) and slice index, plus score, nuclide and filter bin selectors
+- **Volume normalization toggle** and a **scale factor** input for the mesh slice view
+- Linear/logarithmic colour scale with a colour bar, min/max readout and hover tooltips showing physical coordinates, value, σ and relative error
+- Mesh geometry (dimensions, bounds, element widths, rectilinear grids) is now attached to mesh filters so it is available in the tally detail view
+
+### Fixed
+- Tally results are now converted from the stored sums to the true batch mean and standard deviation of the mean using `n_realizations` (previously the raw `sum` and `sum_sq` values were displayed as mean and σ)
+
 ## [0.3.0] - 2026-08-05
 
 ### Added
