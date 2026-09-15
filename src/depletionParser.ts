@@ -36,6 +36,7 @@ export interface DepletionData {
 }
 
 const SECONDS_PER_DAY = 86400;
+const BUNDLED_CHAIN_PATH = path.join(__dirname, '..', 'resources', 'default-chain.xml');
 
 export class DepletionParser {
     private h5wasm: any;
@@ -210,21 +211,57 @@ export class DepletionParser {
         status?: string;
     } {
         const configuredPath = process.env.OPENMC_CHAIN_FILE;
-        if (!configuredPath) {
+        if (configuredPath) {
+            const chainPath = path.resolve(configuredPath);
+            const configured = this.readDecayConstants(chainPath, nuclides);
+            if (!configured.error && (Object.keys(configured.decayConstants).length > 0 || nuclides.length === 0)) {
+                return { decayConstants: configured.decayConstants };
+            }
+
+            const fallback = this.readDecayConstants(BUNDLED_CHAIN_PATH, nuclides);
+            if (Object.keys(fallback.decayConstants).length > 0 || nuclides.length === 0) {
+                const reason = configured.error
+                    ? `Could not read OPENMC_CHAIN_FILE "${configuredPath}": ${configured.error}`
+                    : `OPENMC_CHAIN_FILE "${configuredPath}" did not contain any nuclides from this depletion result.`;
+                return {
+                    decayConstants: fallback.decayConstants,
+                    status: `${reason} Activity is using the bundled simplified ENDF/B-VIII.1 chain; select the calculation's chain for exact results.`
+                };
+            }
+
             return {
                 decayConstants: {},
-                status: 'Set the OPENMC_CHAIN_FILE environment variable to a depletion chain XML file to view activity.'
+                status: configured.error
+                    ? `Could not read OPENMC_CHAIN_FILE "${configuredPath}": ${configured.error}`
+                    : `OPENMC_CHAIN_FILE "${configuredPath}" did not contain any nuclides from this depletion result.`
             };
         }
 
-        const chainPath = path.resolve(configuredPath);
+        const fallback = this.readDecayConstants(BUNDLED_CHAIN_PATH, nuclides);
+        if (Object.keys(fallback.decayConstants).length > 0 || nuclides.length === 0) {
+            return {
+                decayConstants: fallback.decayConstants,
+                status: 'Activity is using the bundled simplified ENDF/B-VIII.1 chain. Set OPENMC_CHAIN_FILE to the calculation\'s chain XML for exact results.'
+            };
+        }
+
+        return {
+            decayConstants: {},
+            status: 'The bundled simplified ENDF/B-VIII.1 chain does not contain these nuclides. Set OPENMC_CHAIN_FILE to the calculation\'s chain XML to view activity.'
+        };
+    }
+
+    private readDecayConstants(chainPath: string, nuclides: string[]): {
+        decayConstants: Record<string, number>;
+        error?: string;
+    } {
         let xml: string;
         try {
             xml = fs.readFileSync(chainPath, 'utf8');
         } catch (error) {
             return {
                 decayConstants: {},
-                status: `Could not read OPENMC_CHAIN_FILE "${configuredPath}": ${error instanceof Error ? error.message : String(error)}`
+                error: error instanceof Error ? error.message : String(error)
             };
         }
 
@@ -248,13 +285,6 @@ export class DepletionParser {
             if (isFinite(halfLife) && halfLife > 0) {
                 decayConstants[nameMatch[1]] = Math.LN2 / halfLife;
             }
-        }
-
-        if (Object.keys(decayConstants).length === 0 && nuclides.length > 0) {
-            return {
-                decayConstants,
-                status: `OPENMC_CHAIN_FILE "${configuredPath}" did not contain any nuclides from this depletion result.`
-            };
         }
 
         return { decayConstants };

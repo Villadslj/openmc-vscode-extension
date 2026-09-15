@@ -33,7 +33,7 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
   - Nuclide search in both the composition table and the evolution chart — filter by element (`Pu`), mass number (`137`) or full name (`Cs137`), and combine several terms
   - Evolution chart that overlays multiple nuclides at once, with an optional logarithmic axis
   - Combined-material composition and evolution views that sum inventories across all materials or mesh voxels
-  - Per-nuclide activity in Bq using half-lives from the depletion chain configured by `OPENMC_CHAIN_FILE`
+  - Per-nuclide activity in Bq using half-lives from the depletion chain configured by `OPENMC_CHAIN_FILE`, with a bundled simplified ENDF/B-VIII.1 chain as a fallback
   - Sortable material-composition columns and a **Show all** action for inspecting the complete depletion nuclide inventory
   - Total activity for the selected depletion material or combined material inventory
 - **User-Friendly Interface**: Clean, VSCode-themed interface with organized sections
@@ -107,7 +107,7 @@ In **Nuclide Evolution**, tick any number of nuclides to overlay them on the cha
 
 Both **Material Composition** and **Nuclide Evolution** include a **Combined (all materials)** option. It sums atom inventories across every material or activation-mesh voxel. Combined atom density uses the sum of all material volumes and is unavailable if any included volume is missing.
 
-The **Activity (Bq)** column requires `OPENMC_CHAIN_FILE` to point to the depletion chain XML used by the calculation. Nuclides without a `half_life` attribute in that chain are treated as stable. If the variable is missing or unreadable, the viewer keeps the column visible and reports that the chain file is required.
+The **Activity (Bq)** column uses the depletion chain XML referenced by `OPENMC_CHAIN_FILE` when available. If the variable is missing, unreadable or does not match the result nuclides, the viewer falls back to a bundled simplified ENDF/B-VIII.1 chain containing 3,820 nuclides and their half-lives. The viewer reports when this fallback is active because the calculation's exact chain remains the authoritative source. Nuclides without a `half_life` attribute in the selected chain are treated as stable.
 
 The material-composition table reads nuclides directly from the depletion result `/nuclides` index, including activation products that do not have neutron transport cross sections. Click any column header to sort ascending or descending. The default sort is activity descending when chain data is available, otherwise atoms descending. Use **Show all** to remove the display row limit.
 

@@ -19,5 +19,5 @@ dist/
 .env.local
 
 # Large sample data used for manual testing (not distributed)
-test_data/*.h5
+test_data/*
 *.h5

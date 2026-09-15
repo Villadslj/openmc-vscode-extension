@@ -5,7 +5,8 @@ All notable changes to the OpenMC VSCode Extension will be documented in this fi
 ## [Unreleased]
 
 ### Added
-- Restored the depletion **Activity (Bq)** column using half-lives from the chain XML referenced by `OPENMC_CHAIN_FILE`
+- Restored the depletion **Activity (Bq)** column using half-lives from the chain XML referenced by `OPENMC_CHAIN_FILE`, with a bundled simplified ENDF/B-VIII.1 chain fallback
+- Total activity now sums all available decay data and reports a partial result when populated nuclides are missing half-lives
 - Restored sortable material-composition columns, added **Show all**, and validate the complete depletion nuclide index so unnamed inventory columns are not silently hidden
 - Material composition now shows total activity for the selected material or combined inventory
 - 1D mesh profiles and 2D mesh heatmaps can export CSV data and PNG images

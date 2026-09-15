@@ -462,9 +462,11 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
             return atoms * depletion.decayConstants[nuclide];
         }
 
-        let compositionSort = depletion.activityStatus
-            ? { key: 'atoms', direction: -1 }
-            : { key: 'activity', direction: -1 };
+        const hasActivityData = depletion.decayConstants &&
+            Object.keys(depletion.decayConstants).length > 0;
+        let compositionSort = hasActivityData
+            ? { key: 'activity', direction: -1 }
+            : { key: 'atoms', direction: -1 };
 
         function updateCompositionSortHeaders() {
             document.querySelectorAll('[data-comp-sort]').forEach(function(button) {
@@ -501,16 +503,20 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
             for (let i = 0; i < nuclideInfo.length; i++) {
                 const info = nuclideInfo[i];
                 if (!info || !info.name) { continue; }
-                const activity = activityFor(info.name, values[i] || 0);
+                const atoms = values[i] || 0;
+                const activity = activityFor(info.name, atoms);
                 if (activity === null) {
-                    missingActivityCount++;
+                    if (atoms > 0) {
+                        missingActivityCount++;
+                    }
                 } else {
                     totalActivity += activity;
                 }
             }
             totalActivityElement.textContent = missingActivityCount > 0
-                ? 'Unavailable — missing decay data for ' + missingActivityCount +
-                    ' nuclide' + (missingActivityCount === 1 ? '' : 's')
+                ? fmt(totalActivity) + ' Bq (partial — missing decay data for ' +
+                    missingActivityCount + ' populated nuclide' +
+                    (missingActivityCount === 1 ? '' : 's') + ')'
                 : fmt(totalActivity) + ' Bq';
 
             const matched = [];
