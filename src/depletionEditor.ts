@@ -53,7 +53,9 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
             materials: data.materials,
             nuclides: data.nuclides,
             timeSteps: data.timeSteps,
-            numbers: data.numbers
+            numbers: data.numbers,
+            decayConstants: data.decayConstants,
+            activityStatus: data.activityStatus
         });
 
         const stepRows = data.timeSteps.map(step => `
@@ -68,7 +70,7 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
 
         const materialOptions = data.materials.map(m =>
             `<option value="${m.index}">${this.escapeHtml(m.name ? `${m.id} (${m.name})` : `Material ${m.id}`)}</option>`
-        ).join('');
+        ).join('') + '<option value="all">Combined (all materials)</option>';
 
         const stepOptions = data.timeSteps.map(s =>
             `<option value="${s.index}">Step ${s.index} — ${this.formatNumber(s.timeDays)} d</option>`
@@ -131,6 +133,20 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
         }
         th {
             background-color: var(--vscode-editor-background);
+        }
+        .sort-button {
+            width: 100%;
+            padding: 0;
+            border: none;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            font-weight: bold;
+            text-align: left;
+        }
+        .sort-button:hover {
+            background: transparent;
+            color: var(--vscode-textLink-foreground);
         }
         select, input {
             background-color: var(--vscode-input-background);
@@ -278,15 +294,29 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
             <label>Search</label>
             <input id="compSearch" type="search" placeholder="e.g. Pu, 137, Cs137, U235 Pu239">
             <label>Max rows</label>
-            <input id="topN" type="number" min="1" max="5000" value="25" style="width: 70px;">
+            <input id="topN" type="number" min="1" max="${Math.max(5000, data.nuclides.length)}" value="${Math.min(100, Math.max(1, data.nuclides.length))}" style="width: 80px;">
+            <button id="compShowAll" type="button">Show all</button>
             <label><input type="checkbox" id="compHideZero" checked> Hide zero</label>
             <button id="compClear" type="button">Clear</button>
             <span class="hint" id="compCount"></span>
         </div>
-        <div class="hint">Search by element (<code>Pu</code>), mass number (<code>137</code>) or full name (<code>Cs137</code>). Separate several terms with spaces or commas to match any of them.</div>
+        <div class="hint">Search by element (<code>Pu</code>), mass number (<code>137</code>) or full name (<code>Cs137</code>). Separate several terms with spaces or commas to match any of them. The combined material sums atom inventories and uses the total material volume for atom density.</div>
+        <div class="hint">${data.activityStatus
+            ? this.escapeHtml(data.activityStatus)
+            : 'Activity is calculated from half-lives loaded through OPENMC_CHAIN_FILE.'}</div>
+        <div class="info-item" style="margin-top: 10px;">
+            <div class="info-label">Total Activity</div>
+            <div id="compTotalActivity">-</div>
+        </div>
         <div class="scroll-table">
             <table>
-                <thead><tr><th>Nuclide</th><th>Atoms</th><th>Atom density (atom/b-cm)</th><th>Fraction</th></tr></thead>
+                <thead><tr>
+                    <th><button class="sort-button" type="button" data-comp-sort="nuclide">Nuclide</button></th>
+                    <th><button class="sort-button" type="button" data-comp-sort="atoms">Atoms</button></th>
+                    <th><button class="sort-button" type="button" data-comp-sort="activity">Activity (Bq)</button></th>
+                    <th><button class="sort-button" type="button" data-comp-sort="density">Atom density (atom/b-cm)</button></th>
+                    <th><button class="sort-button" type="button" data-comp-sort="fraction">Fraction</button></th>
+                </tr></thead>
                 <tbody id="compBody"></tbody>
             </table>
         </div>
@@ -306,7 +336,7 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
             <label><input type="checkbox" id="evoLogScale"> Log scale</label>
             <span class="hint" id="evoCount"></span>
         </div>
-        <div class="hint">Tick several nuclides to overlay them. Sorted by abundance in the final step.</div>
+        <div class="hint">Tick several nuclides to overlay them. Sorted by abundance in the final step. The combined material sums each nuclide across all materials at every time step.</div>
         <div class="chips" id="evoChips"></div>
         <div class="nuclide-list" id="evoNucList"></div>
         <div class="chart-container"><canvas id="evoChart" height="110"></canvas></div>
@@ -387,29 +417,101 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
             });
         }
 
-        function atomsForSelection(matIndex, stepIndex) {
+        function selectedMaterialValue(selectId) {
+            const value = document.getElementById(selectId).value;
+            return value === 'all' ? 'all' : parseInt(value, 10);
+        }
+
+        function atomsForSelection(materialSelection, stepIndex) {
             const step = depletion.numbers[stepIndex];
-            return (step && step[matIndex]) || null;
+            if (!step) { return null; }
+            if (materialSelection !== 'all') {
+                return step[materialSelection] || null;
+            }
+            const combined = new Array(depletion.nuclides.length).fill(0);
+            for (const material of depletion.materials) {
+                const values = step[material.index];
+                if (!values) { return null; }
+                for (let i = 0; i < combined.length; i++) {
+                    combined[i] += values[i] || 0;
+                }
+            }
+            return depletion.materials.length > 0 ? combined : null;
+        }
+
+        function volumeForSelection(materialSelection) {
+            if (materialSelection !== 'all') {
+                const material = materialByIndex(materialSelection);
+                return material && isFinite(material.volume) && material.volume > 0 ? material.volume : null;
+            }
+            let totalVolume = 0;
+            for (const material of depletion.materials) {
+                if (!isFinite(material.volume) || !(material.volume > 0)) {
+                    return null;
+                }
+                totalVolume += material.volume;
+            }
+            return totalVolume > 0 ? totalVolume : null;
+        }
+
+        function activityFor(nuclide, atoms) {
+            if (!depletion.decayConstants ||
+                !Object.prototype.hasOwnProperty.call(depletion.decayConstants, nuclide)) {
+                return null;
+            }
+            return atoms * depletion.decayConstants[nuclide];
+        }
+
+        let compositionSort = depletion.activityStatus
+            ? { key: 'atoms', direction: -1 }
+            : { key: 'activity', direction: -1 };
+
+        function updateCompositionSortHeaders() {
+            document.querySelectorAll('[data-comp-sort]').forEach(function(button) {
+                const key = button.getAttribute('data-comp-sort');
+                const label = button.getAttribute('data-sort-label') || button.textContent.replace(/[ ↑↓]$/, '');
+                button.setAttribute('data-sort-label', label);
+                button.textContent = label + (key === compositionSort.key
+                    ? (compositionSort.direction > 0 ? ' ↑' : ' ↓')
+                    : '');
+            });
         }
 
         function renderComposition() {
             const body = document.getElementById('compBody');
             if (!body) { return; }
-            const matIndex = parseInt(document.getElementById('matSelect').value, 10);
+            const materialSelection = selectedMaterialValue('matSelect');
             const stepIndex = parseInt(document.getElementById('stepSelect').value, 10);
             const topN = Math.max(1, parseInt(document.getElementById('topN').value, 10) || 25);
             const terms = parseQuery(document.getElementById('compSearch').value);
             const hideZero = document.getElementById('compHideZero').checked;
             const count = document.getElementById('compCount');
-            const values = atomsForSelection(matIndex, stepIndex);
+            const totalActivityElement = document.getElementById('compTotalActivity');
+            const values = atomsForSelection(materialSelection, stepIndex);
             if (!values) {
-                body.innerHTML = '<tr><td colspan="4">No data for this selection</td></tr>';
+                body.innerHTML = '<tr><td colspan="5">No data for this selection</td></tr>';
                 count.textContent = '';
+                totalActivityElement.textContent = '-';
                 return;
             }
             const total = values.reduce((a, b) => a + (b || 0), 0);
-            const material = materialByIndex(matIndex);
-            const volume = material && material.volume ? material.volume : null;
+            const volume = volumeForSelection(materialSelection);
+            let totalActivity = 0;
+            let missingActivityCount = 0;
+            for (let i = 0; i < nuclideInfo.length; i++) {
+                const info = nuclideInfo[i];
+                if (!info || !info.name) { continue; }
+                const activity = activityFor(info.name, values[i] || 0);
+                if (activity === null) {
+                    missingActivityCount++;
+                } else {
+                    totalActivity += activity;
+                }
+            }
+            totalActivityElement.textContent = missingActivityCount > 0
+                ? 'Unavailable — missing decay data for ' + missingActivityCount +
+                    ' nuclide' + (missingActivityCount === 1 ? '' : 's')
+                : fmt(totalActivity) + ' Bq';
 
             const matched = [];
             for (let i = 0; i < nuclideInfo.length; i++) {
@@ -418,9 +520,33 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
                 const atoms = values[i] || 0;
                 if (hideZero && !(atoms > 0)) { continue; }
                 if (!matchesTerms(info, terms)) { continue; }
-                matched.push({ nuclide: info.name, atoms: atoms });
+                const activity = activityFor(info.name, atoms);
+                const density = volume ? atoms / volume * BARN_CM : null;
+                const fraction = total > 0 ? atoms / total : null;
+                matched.push({
+                    nuclide: info.name,
+                    atoms: atoms,
+                    activity: activity,
+                    density: density,
+                    fraction: fraction
+                });
             }
-            matched.sort((a, b) => b.atoms - a.atoms);
+            matched.sort(function(a, b) {
+                const key = compositionSort.key;
+                if (key === 'nuclide') {
+                    return compositionSort.direction * a.nuclide.localeCompare(b.nuclide, undefined, {
+                        numeric: true,
+                        sensitivity: 'base'
+                    });
+                }
+                const av = a[key];
+                const bv = b[key];
+                if (av === null && bv === null) { return a.nuclide.localeCompare(b.nuclide); }
+                if (av === null) { return 1; }
+                if (bv === null) { return -1; }
+                if (av === bv) { return a.nuclide.localeCompare(b.nuclide); }
+                return compositionSort.direction * (av - bv);
+            });
             const rows = matched.slice(0, topN);
 
             count.textContent = matched.length === 0
@@ -428,10 +554,12 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
                 : 'showing ' + rows.length + ' of ' + matched.length + ' matching nuclides';
 
             body.innerHTML = rows.length === 0
-                ? '<tr><td colspan="4">' + (terms.length > 0 ? 'No nuclide matches this search' : 'All nuclide densities are zero') + '</td></tr>'
+                ? '<tr><td colspan="5">' + (terms.length > 0 ? 'No nuclide matches this search' : 'All nuclide densities are zero') + '</td></tr>'
                 : rows.map(r => '<tr><td>' + escapeHtml(r.nuclide) + '</td><td>' + fmt(r.atoms) + '</td><td>' +
-                    (volume ? fmt(r.atoms / volume * BARN_CM) : '-') + '</td><td>' +
-                    (total > 0 ? (100 * r.atoms / total).toFixed(4) + ' %' : '-') + '</td></tr>').join('');
+                    (r.activity === null ? '-' : fmt(r.activity)) + '</td><td>' +
+                    (r.density === null ? '-' : fmt(r.density)) + '</td><td>' +
+                    (r.fraction === null ? '-' : (100 * r.fraction).toFixed(4) + ' %') + '</td></tr>').join('');
+            updateCompositionSortHeaders();
         }
 
         const evoSelected = [];
@@ -442,9 +570,11 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
 
         function evoMatchingNuclides() {
             const terms = parseQuery(document.getElementById('evoSearch').value);
-            const matIndex = parseInt(document.getElementById('evoMatSelect').value, 10);
+            const materialSelection = selectedMaterialValue('evoMatSelect');
             const lastStep = depletion.numbers[depletion.numbers.length - 1] || [];
-            const values = lastStep[matIndex] || [];
+            const values = materialSelection === 'all'
+                ? atomsForSelection('all', depletion.numbers.length - 1) || []
+                : lastStep[materialSelection] || [];
             const matches = [];
             for (let i = 0; i < nuclideInfo.length; i++) {
                 const info = nuclideInfo[i];
@@ -503,15 +633,16 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
         function renderEvolution() {
             const canvas = document.getElementById('evoChart');
             if (!canvas) { return; }
-            const matIndex = parseInt(document.getElementById('evoMatSelect').value, 10);
+            const materialSelection = selectedMaterialValue('evoMatSelect');
             const logScale = document.getElementById('evoLogScale').checked;
             const labels = depletion.timeSteps.map(s => s.timeDays.toPrecision(4));
 
             const datasets = evoSelected.map(function (name) {
                 const nucIndex = nuclideIndexByName[name];
                 const color = evoColor(name);
-                const values = depletion.numbers.map(function (step) {
-                    const atoms = step[matIndex] ? step[matIndex][nucIndex] : null;
+                const values = depletion.numbers.map(function (step, stepIndex) {
+                    const selectedAtoms = atomsForSelection(materialSelection, stepIndex);
+                    const atoms = selectedAtoms ? selectedAtoms[nucIndex] : null;
                     // A logarithmic axis cannot plot zero or negative values.
                     return logScale && !(atoms > 0) ? null : atoms;
                 });
@@ -583,7 +714,25 @@ export class DepletionEditorProvider implements vscode.CustomReadonlyEditorProvi
                 matSelect.addEventListener('change', renderComposition);
                 document.getElementById('stepSelect').addEventListener('change', renderComposition);
                 document.getElementById('topN').addEventListener('change', renderComposition);
+                document.getElementById('compShowAll').addEventListener('click', function () {
+                    document.getElementById('topN').value = String(depletion.nuclides.length);
+                    renderComposition();
+                });
                 document.getElementById('compHideZero').addEventListener('change', renderComposition);
+                document.querySelectorAll('[data-comp-sort]').forEach(function(button) {
+                    button.addEventListener('click', function () {
+                        const key = button.getAttribute('data-comp-sort');
+                        if (compositionSort.key === key) {
+                            compositionSort.direction *= -1;
+                        } else {
+                            compositionSort = {
+                                key: key,
+                                direction: key === 'nuclide' ? 1 : -1
+                            };
+                        }
+                        renderComposition();
+                    });
+                });
                 compSearch.addEventListener('input', renderComposition);
                 document.getElementById('compClear').addEventListener('click', function () {
                     compSearch.value = '';

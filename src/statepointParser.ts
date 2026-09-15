@@ -14,7 +14,7 @@ export interface MeshInfo {
 export interface TallyFilter {
     id: number;
     type: string;
-    bins?: number[];
+    bins?: Array<number | string>;
     energyBins?: number[];
     cellBins?: number[];
     meshId?: number;
@@ -344,15 +344,25 @@ export class StatepointParser {
                                 if (binsValue && binsValue.buffer) {
                                     binsValue = Array.from(binsValue);
                                 }
-                                if (Array.isArray(binsValue)) {
-                                    filter.bins = binsValue.map((v: any) => Number(v));
+                                const bins = Array.isArray(binsValue) ? binsValue : [binsValue];
+                                if (binsValue !== undefined && binsValue !== null) {
+                                    filter.bins = bins.map((v: any) =>
+                                        typeof v === 'string' ? v.trim() : Number(v));
                                     // For energy filters, store as energyBins
                                     if (filter.type.toLowerCase().includes('energy')) {
-                                        filter.energyBins = filter.bins;
+                                        filter.energyBins = filter.bins.map(v => Number(v));
                                     }
                                     // For cell filters, store as cellBins
                                     if (filter.type.toLowerCase().includes('cell')) {
-                                        filter.cellBins = filter.bins;
+                                        filter.cellBins = filter.bins.map(v => Number(v));
+                                    }
+                                    // OpenMC stores the referenced mesh ID in the bins
+                                    // dataset for mesh filters.
+                                    if (filter.type.toLowerCase().includes('mesh') && filter.bins.length > 0) {
+                                        filter.meshId = Number(filter.bins[0]);
+                                        if (meshMap[filter.meshId]) {
+                                            filter.mesh = meshMap[filter.meshId];
+                                        }
                                     }
                                 }
                             }
@@ -594,7 +604,12 @@ export class StatepointParser {
                         if (meshGroup.attrs) {
                             for (const attrName of Object.keys(meshGroup.attrs)) {
                                 try {
-                                    mesh[attrName] = meshGroup.attrs[attrName];
+                                    // The group name is the reliable mesh identifier. In
+                                    // h5wasm, the "id" property on attrs can be an internal
+                                    // HDF5 object rather than the OpenMC mesh ID.
+                                    if (attrName !== 'id') {
+                                        mesh[attrName] = meshGroup.attrs[attrName];
+                                    }
                                 } catch (e) {
                                     // Skip attribute
                                 }

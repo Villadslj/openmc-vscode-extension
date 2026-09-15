@@ -5,10 +5,20 @@ All notable changes to the OpenMC VSCode Extension will be documented in this fi
 ## [Unreleased]
 
 ### Added
+- Restored the depletion **Activity (Bq)** column using half-lives from the chain XML referenced by `OPENMC_CHAIN_FILE`
+- Restored sortable material-composition columns, added **Show all**, and validate the complete depletion nuclide index so unnamed inventory columns are not silently hidden
+- Material composition now shows total activity for the selected material or combined inventory
+- 1D mesh profiles and 2D mesh heatmaps can export CSV data and PNG images
+- Depletion material-composition and nuclide-evolution views can combine all materials or activation-mesh voxels into a summed inventory
 - **2D Mesh Slice Histogram**: mesh tallies can now be viewed as a 2D heatmap with selectable coordinate plane (XY/XZ/YZ) and slice index, plus score, nuclide and filter bin selectors
 - **Volume normalization toggle** and a **scale factor** input for the mesh slice view
 - Linear/logarithmic colour scale with a colour bar, min/max readout and hover tooltips showing physical coordinates, value, σ and relative error
 - Mesh geometry (dimensions, bounds, element widths, rectilinear grids) is now attached to mesh filters so it is available in the tally detail view
+- Parent-nuclide selectors now show isotope names and can combine all parent bins
+- Dose magnitude and time denominator can be selected independently, supporting combinations such as pSv/s, mSv/h and Sv/s
+- 2D mesh heatmaps support button and mouse-wheel zoom
+- Mesh tallies now include coordinate-aware 1D line profiles through 1D, 2D or 3D meshes, with fixed-axis selectors and the same parent-nuclide aggregation and unit controls as the 2D view
+- Mesh result tables now show the selected line profile with physical coordinates and bounds instead of flattened mesh-bin indices
 
 ### Fixed
 - Tally results are now converted from the stored sums to the true batch mean and standard deviation of the mean using `n_realizations` (previously the raw `sum` and `sum_sq` values were displayed as mean and σ)

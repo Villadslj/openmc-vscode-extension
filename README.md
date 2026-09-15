@@ -18,7 +18,11 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
   - Score, nuclide and energy/other filter bin selection
   - Optional normalization by mesh element volume
   - A user-defined scale factor (normalization constant)
+  - Parent-nuclide selection by isotope name, including a combined view that sums all parents
+  - Independent dose and time units, allowing combinations such as pSv/s, mSv/h or Sv/s
+  - Zoom controls and mouse-wheel zoom for inspecting dense meshes
   - Linear or logarithmic colour scale with colour bar, plus hover tooltips showing coordinates, value, σ and relative error
+  - Coordinate-aware 1D line profiles through 1D, 2D or 3D meshes
 - **Mesh Visualization**: Examine mesh definitions including dimensions and spatial bounds
 - **Summary Statistics**: View key simulation metrics like k-effective and entropy
 - **Depletion Results Viewer**: Open and inspect OpenMC depletion results files (e.g. `depletion_results.h5`) to see:
@@ -28,6 +32,10 @@ A Visual Studio Code extension for inspecting OpenMC statepoint files. This exte
   - Material composition at any time step (atoms, atom density in atom/b-cm, and atom fraction)
   - Nuclide search in both the composition table and the evolution chart — filter by element (`Pu`), mass number (`137`) or full name (`Cs137`), and combine several terms
   - Evolution chart that overlays multiple nuclides at once, with an optional logarithmic axis
+  - Combined-material composition and evolution views that sum inventories across all materials or mesh voxels
+  - Per-nuclide activity in Bq using half-lives from the depletion chain configured by `OPENMC_CHAIN_FILE`
+  - Sortable material-composition columns and a **Show all** action for inspecting the complete depletion nuclide inventory
+  - Total activity for the selected depletion material or combined material inventory
 - **User-Friendly Interface**: Clean, VSCode-themed interface with organized sections
 
 ## Installation
@@ -97,6 +105,14 @@ Both the **Material Composition** table and the **Nuclide Evolution** chart have
 
 In **Nuclide Evolution**, tick any number of nuclides to overlay them on the chart, use **Add matching** to add the current search results in one go, and remove a nuclide by clicking the `×` on its chip.
 
+Both **Material Composition** and **Nuclide Evolution** include a **Combined (all materials)** option. It sums atom inventories across every material or activation-mesh voxel. Combined atom density uses the sum of all material volumes and is unavailable if any included volume is missing.
+
+The **Activity (Bq)** column requires `OPENMC_CHAIN_FILE` to point to the depletion chain XML used by the calculation. Nuclides without a `half_life` attribute in that chain are treated as stable. If the variable is missing or unreadable, the viewer keeps the column visible and reports that the chain file is required.
+
+The material-composition table reads nuclides directly from the depletion result `/nuclides` index, including activation products that do not have neutron transport cross sections. Click any column header to sort ascending or descending. The default sort is activity descending when chain data is available, otherwise atoms descending. Use **Show all** to remove the display row limit.
+
+The 1D mesh profile and 2D mesh heatmap can export their current numerical values as CSV or save the rendered plot as a PNG through the VS Code Save dialog.
+
 ### Viewing Information
 
 Once a statepoint file is opened, you'll see:
@@ -125,11 +141,19 @@ Click on any tally to open a detailed modal view with:
   - **Plane**: choose XY, XZ or YZ; only planes with more than one element on both axes are offered
   - **Slice**: choose the index along the remaining axis, labelled with its physical coordinate range
   - **Filter/nuclide/score selectors**: shown whenever the tally has more than one bin for them, so a single 2D field is displayed
-  - **Normalize by volume**: divides each bin by its mesh element volume (cm³, or cm² for 2D meshes)
-  - **Scale factor**: an arbitrary multiplier applied after normalization (invalid input falls back to 1)
+  - **Normalize by volume**: divides each bin by its mesh element volume (cm³), area (cm²), or length (cm); enabled by default for recognized dose tallies
+  - **Scale factor**: an arbitrary multiplier applied after normalization (invalid input falls back to 1); for dose-rate units this is interpreted as the source rate in particles/s
+  - **Parent nuclide**: select an isotope by name or combine all parent-nuclide bins
+  - **Dose and time units**: choose the dose magnitude (pSv, nSv, µSv, mSv or Sv) and time denominator (s, min, h or day) independently
+  - **Zoom**: use the zoom buttons or mouse wheel over the heatmap; reset restores the full mesh
   - **Colour scale**: linear or logarithmic, with a colour bar and min/max readout; non-positive bins are greyed out on a logarithmic scale
   - Hover any cell for its indices, physical centre coordinates, value, standard deviation and relative error
-- **Results Data Table**: Detailed table showing bin index, x-value, mean, standard deviation, and relative error
+- **Mesh Line Profile (1D)**:
+  - Choose X, Y or Z as the profile axis and select an index/coordinate on each remaining mesh axis
+  - Uses the same parent-nuclide combination, nuclide, score, volume normalization, scale factor, and dose/time unit controls as the 2D view
+  - Works for 1D meshes as well as lines through 2D and 3D meshes
+  - The accompanying results table shows mesh index, physical coordinate and bounds, mean, standard deviation, and relative error for the selected line instead of ambiguous flattened mesh-bin numbers
+- **Results Data Table**: Non-mesh tallies retain the general bin table; mesh tallies use the coordinate-aware line-profile table
 
 ## Requirements
 

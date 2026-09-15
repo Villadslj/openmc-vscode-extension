@@ -36,6 +36,41 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 vscode.Uri.file(path.join(this.context.extensionPath, 'node_modules'))
             ]
         };
+        const exportMessageSubscription = webviewPanel.webview.onDidReceiveMessage(async message => {
+            if (!message || message.command !== 'exportPlot') {
+                return;
+            }
+            const format = message.format === 'png' ? 'png' : message.format === 'csv' ? 'csv' : undefined;
+            if (!format || typeof message.data !== 'string') {
+                void vscode.window.showErrorMessage('Could not export plot: invalid export data.');
+                return;
+            }
+            const fallbackName = format === 'png' ? 'openmc-plot.png' : 'openmc-plot.csv';
+            const suggestedName = this.sanitizeExportFileName(
+                typeof message.fileName === 'string' ? message.fileName : fallbackName,
+                fallbackName
+            );
+            const target = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(path.join(path.dirname(document.uri.fsPath), suggestedName)),
+                filters: format === 'png'
+                    ? { 'PNG image': ['png'] }
+                    : { 'CSV data': ['csv'] }
+            });
+            if (!target) {
+                return;
+            }
+            try {
+                const bytes = format === 'png'
+                    ? this.decodePngDataUrl(message.data)
+                    : Buffer.from(message.data, 'utf8');
+                await vscode.workspace.fs.writeFile(target, bytes);
+            } catch (error) {
+                void vscode.window.showErrorMessage(
+                    `Could not export plot: ${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+        });
+        webviewPanel.onDidDispose(() => exportMessageSubscription.dispose());
 
         // Both viewers are registered for "*.h5", so the file contents decide
         // which one actually renders. Depletion results are handed over to the
@@ -280,6 +315,17 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             background-color: var(--vscode-input-background);
             color: var(--vscode-input-foreground);
         }
+        .chart-controls button {
+            padding: 5px 10px;
+            border-radius: 3px;
+            border: 1px solid var(--vscode-button-border, transparent);
+            background-color: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            cursor: pointer;
+        }
+        .chart-controls button:hover {
+            background-color: var(--vscode-button-secondaryHoverBackground);
+        }
         
         /* Results table */
         .results-table-container {
@@ -448,8 +494,11 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
         // Store tally data for JavaScript access
         const talliesData = ${talliesJson};
         let currentChart = null;
+        let currentProfileChart = null;
+        let currentProfileData = null;
         let currentMeshInfo = null;
         let currentHeatmap = null;
+        const vscodeApi = acquireVsCodeApi();
         
         // Chart.js configuration for dark mode compatibility
         document.addEventListener('DOMContentLoaded', function() {
@@ -510,10 +559,16 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 html += '<p><strong>Total bins:</strong> ' + tally.results.mean.length + '</p>';
                 if (tally.results.mean.length > 0) {
                     const mean = tally.results.mean;
-                    const validMean = mean.filter(function(v) { return !isNaN(v) && isFinite(v); });
-                    if (validMean.length > 0) {
-                        const minVal = Math.min.apply(null, validMean);
-                        const maxVal = Math.max.apply(null, validMean);
+                    let minVal = Infinity;
+                    let maxVal = -Infinity;
+                    for (let i = 0; i < mean.length; i++) {
+                        const value = mean[i];
+                        if (!isNaN(value) && isFinite(value)) {
+                            if (value < minVal) minVal = value;
+                            if (value > maxVal) maxVal = value;
+                        }
+                    }
+                    if (isFinite(minVal) && isFinite(maxVal)) {
                         html += '<p><strong>Min value:</strong> ' + minVal.toExponential(4) + '</p>';
                         html += '<p><strong>Max value:</strong> ' + maxVal.toExponential(4) + '</p>';
                     }
@@ -557,6 +612,11 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                     if (filter.meshId !== undefined) {
                         html += '<div style="margin-top: 5px;"><strong>Mesh ID:</strong> ' + filter.meshId + '</div>';
                     }
+
+                    if (isParentNuclideFilter(filter) && filter.bins && filter.bins.length > 0) {
+                        html += '<div style="margin-top: 5px;"><strong>Parent nuclides:</strong> ' +
+                            filter.bins.map(function(bin) { return escapeHtml(String(bin)); }).join(', ') + '</div>';
+                    }
                     
                     html += '</li>';
                 });
@@ -565,8 +625,8 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             }
             
             // Mesh slice (2D histogram) section
-            currentMeshInfo = getMeshSliceInfo(tally);
-            if (currentMeshInfo) {
+            currentMeshInfo = getMeshVisualizationInfo(tally);
+            if (currentMeshInfo && currentMeshInfo.planes.length > 0) {
                 html += buildMeshSliceSection(currentMeshInfo, index);
             } else if (hasMeshFilter(tally)) {
                 html += '<div class="chart-section">';
@@ -575,8 +635,13 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 html += '</div>';
             }
 
+            // Mesh line profile section
+            if (currentMeshInfo && currentMeshInfo.profileAxes.length > 0) {
+                html += buildMeshProfileSection(currentMeshInfo, index);
+            }
+
             // Chart section
-            if (tally.results && tally.results.mean && tally.results.mean.length > 0) {
+            if (!currentMeshInfo && tally.results && tally.results.mean && tally.results.mean.length > 0) {
                 html += '<div class="chart-section">';
                 html += '<h3>Spectrum Visualization</h3>';
                 
@@ -648,11 +713,14 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             modal.classList.add('active');
             
             // Create chart if results exist
-            if (tally.results && tally.results.mean && tally.results.mean.length > 0) {
+            if (!currentMeshInfo && tally.results && tally.results.mean && tally.results.mean.length > 0) {
                 setTimeout(function() { updateChart(index); }, 100);
             }
-            if (currentMeshInfo) {
+            if (currentMeshInfo && currentMeshInfo.planes.length > 0) {
                 setTimeout(function() { updateMeshSlice(index); }, 100);
+            }
+            if (currentMeshInfo && currentMeshInfo.profileAxes.length > 0) {
+                setTimeout(function() { updateMeshProfile(index); }, 100);
             }
         }
         
@@ -862,6 +930,16 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             return !!filter && typeof filter.type === 'string' && filter.type.toLowerCase().indexOf('mesh') !== -1;
         }
 
+        function isParentNuclideFilter(filter) {
+            if (!filter || typeof filter.type !== 'string') return false;
+            return filter.type.toLowerCase().replace(/[^a-z]/g, '') === 'parentnuclide';
+        }
+
+        function isDoseTally(tally) {
+            const name = String((tally && tally.name) || '');
+            return /(^|[^a-z])dose([^a-z]|$)/i.test(name) || name.toLowerCase().indexOf('dose_') !== -1;
+        }
+
         function hasMeshFilter(tally) {
             return !!(tally.filters && tally.filters.some(isMeshFilter));
         }
@@ -888,10 +966,14 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
 
         function meshDims(mesh) {
             const d = mesh.dimension || [];
-            return [Number(d[0]) || 0, Number(d[1]) || 0, d.length > 2 ? (Number(d[2]) || 0) : 1];
+            return [
+                Number(d[0]) || 0,
+                d.length > 1 ? (Number(d[1]) || 0) : 1,
+                d.length > 2 ? (Number(d[2]) || 0) : 1
+            ];
         }
 
-        function getMeshSliceInfo(tally) {
+        function getMeshVisualizationInfo(tally) {
             if (!tally || !tally.results || !tally.results.mean || tally.results.mean.length === 0) return null;
             if (!tally.filters || tally.filters.length === 0) return null;
 
@@ -902,7 +984,7 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             if (meshIdx < 0) return null;
 
             const mesh = tally.filters[meshIdx].mesh;
-            if (!mesh || !mesh.dimension || mesh.dimension.length < 2) return null;
+            if (!mesh || !mesh.dimension || mesh.dimension.length < 1) return null;
 
             const type = String(mesh.type || 'regular').toLowerCase();
             if (type.indexOf('regular') === -1 && type.indexOf('rectilinear') === -1) return null;
@@ -911,7 +993,8 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             if (dims.some(function(d) { return !isFinite(d) || d < 1; })) return null;
 
             const planes = MESH_PLANES.filter(function(p) { return dims[p.axes[0]] > 1 && dims[p.axes[1]] > 1; });
-            if (planes.length === 0) return null;
+            const profileAxes = [0, 1, 2].filter(function(axis) { return dims[axis] > 1; });
+            if (profileAxes.length === 0) return null;
 
             const nScores = (tally.scores && tally.scores.length) ? tally.scores.length : 1;
             const nNuclides = (tally.nuclides && tally.nuclides.length) ? tally.nuclides.length : 1;
@@ -939,13 +1022,14 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 tally: tally,
                 mesh: mesh,
                 meshIdx: meshIdx,
-                nAxes: mesh.dimension.length >= 3 ? 3 : 2,
+                nAxes: Math.max(1, Math.min(3, mesh.dimension.length)),
                 dims: dims,
                 binCounts: binCounts,
                 strides: strides,
                 nScores: nScores,
                 nNuclides: nNuclides,
-                planes: planes
+                planes: planes,
+                profileAxes: profileAxes
             };
         }
 
@@ -973,6 +1057,18 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             return NaN;
         }
 
+        function coordinateAt(mesh, axis, position, dims) {
+            const bounded = Math.max(0, Math.min(dims[axis], position));
+            if (bounded === dims[axis]) {
+                const last = dims[axis] - 1;
+                return elementLow(mesh, axis, last, dims) + elementWidth(mesh, axis, last, dims);
+            }
+            const idx = Math.floor(bounded);
+            const low = elementLow(mesh, axis, idx, dims);
+            const width = elementWidth(mesh, axis, idx, dims);
+            return low + (bounded - idx) * width;
+        }
+
         function elementVolume(info, idxs) {
             let volume = 1;
             for (let axis = 0; axis < info.nAxes; axis++) {
@@ -989,6 +1085,9 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
 
         function filterBinLabel(filter, i) {
             const type = String(filter.type || '').toLowerCase();
+            if (isParentNuclideFilter(filter) && filter.bins && filter.bins[i] !== undefined) {
+                return String(filter.bins[i]);
+            }
             if (type.indexOf('energy') !== -1 && filter.energyBins && filter.energyBins.length > i + 1) {
                 return filter.energyBins[i].toExponential(3) + ' - ' + filter.energyBins[i + 1].toExponential(3) + ' eV';
             }
@@ -1026,6 +1125,9 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 const filter = tally.filters[i];
                 html += '<label>' + escapeHtml(formatFilterName(filter.type)) + ': ';
                 html += '<select id="meshFilterSel_' + i + '" onchange="updateMeshSlice(' + index + ')">';
+                if (isParentNuclideFilter(filter)) {
+                    html += '<option value="-1">Combined (all parent nuclides)</option>';
+                }
                 html += optionsHtml(count, function(b) { return filterBinLabel(filter, b); });
                 html += '</select></label>';
             });
@@ -1044,16 +1146,38 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
 
             const volumeAvailable = meshVolumeAvailable(info);
             html += '<label><input type="checkbox" id="meshNormalize" onchange="updateMeshSlice(' + index + ')"' +
+                (volumeAvailable && isDoseTally(tally) ? ' checked' : '') +
                 (volumeAvailable ? '' : ' disabled') + '> Normalize by volume' +
                 (volumeAvailable ? '' : ' (unavailable)') + '</label>';
 
             html += '<label>Scale factor: <input type="number" id="meshScale" value="1" step="any" style="width: 110px;" oninput="updateMeshSlice(' + index + ')"></label>';
+
+            if (isDoseTally(tally)) {
+                html += '<label>Dose unit: <select id="meshDoseMagnitude" onchange="updateMeshSlice(' + index + ')">';
+                html += '<option value="1">pSv</option>';
+                html += '<option value="1e-3">nSv</option>';
+                html += '<option value="1e-6">µSv</option>';
+                html += '<option value="1e-9">mSv</option>';
+                html += '<option value="1e-12">Sv</option>';
+                html += '</select></label>';
+                html += '<label>Per: <select id="meshTimeUnit" onchange="updateMeshSlice(' + index + ')">';
+                html += '<option value="1">s</option>';
+                html += '<option value="60">min</option>';
+                html += '<option value="3600">h</option>';
+                html += '<option value="86400">day</option>';
+                html += '</select></label>';
+            }
 
             html += '<label>Colour scale: <select id="meshColorScale" onchange="updateMeshSlice(' + index + ')">';
             html += '<option value="linear">Linear</option>';
             html += '<option value="logarithmic">Logarithmic</option>';
             html += '</select></label>';
 
+            html += '<button type="button" onclick="zoomMesh(1.5)">Zoom in</button>';
+            html += '<button type="button" onclick="zoomMesh(1 / 1.5)">Zoom out</button>';
+            html += '<button type="button" onclick="resetMeshZoom()">Reset zoom</button>';
+            html += '<button type="button" onclick="exportMeshCsv()">Export CSV</button>';
+            html += '<button type="button" onclick="exportCanvasPng(\\'meshHeatmap\\', meshExportName(\\'2d\\'))">Export PNG</button>';
             html += '</div>';
 
             html += '<div class="chart-container"><div class="heatmap-layout">';
@@ -1064,6 +1188,101 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             html += '<div class="heatmap-stats" id="meshStats"></div>';
             html += '</div>';
             html += '<div class="heatmap-note" id="meshNote"></div>';
+            html += '</div></div>';
+            return html;
+        }
+
+        function axisBinLabel(info, axis, i) {
+            const low = elementLow(info.mesh, axis, i, info.dims);
+            const width = elementWidth(info.mesh, axis, i, info.dims);
+            let label = AXIS_NAMES[axis] + ' index ' + (i + 1);
+            if (isFinite(low) && isFinite(width)) {
+                label += ' (' + formatCoord(low) + ' to ' + formatCoord(low + width) + ' cm)';
+            }
+            return label;
+        }
+
+        function buildMeshProfileSection(info, index) {
+            const tally = info.tally;
+            let html = '<div class="chart-section">';
+            html += '<h3>Mesh Line Profile (1D)</h3>';
+            html += '<div class="chart-controls">';
+
+            html += '<label>Profile axis: <select id="profileAxis" onchange="onMeshProfileAxisChange(' + index + ')">';
+            info.profileAxes.forEach(function(axis) {
+                html += '<option value="' + axis + '">' + AXIS_NAMES[axis] + '</option>';
+            });
+            html += '</select></label>';
+
+            for (let axis = 0; axis < info.nAxes; axis++) {
+                html += '<label id="profileFixedWrap_' + axis + '">' + AXIS_NAMES[axis] + ' position: ';
+                html += '<select id="profileFixed_' + axis + '" onchange="updateMeshProfile(' + index + ')">';
+                html += optionsHtml(info.dims[axis], function(i) { return axisBinLabel(info, axis, i); });
+                html += '</select></label>';
+            }
+
+            info.binCounts.forEach(function(count, i) {
+                if (i === info.meshIdx || count <= 1) return;
+                const filter = tally.filters[i];
+                html += '<label>' + escapeHtml(formatFilterName(filter.type)) + ': ';
+                html += '<select id="profileFilterSel_' + i + '" onchange="updateMeshProfile(' + index + ')">';
+                if (isParentNuclideFilter(filter)) {
+                    html += '<option value="-1">Combined (all parent nuclides)</option>';
+                }
+                html += optionsHtml(count, function(b) { return filterBinLabel(filter, b); });
+                html += '</select></label>';
+            });
+
+            if (info.nNuclides > 1) {
+                html += '<label>Nuclide: <select id="profileNuclide" onchange="updateMeshProfile(' + index + ')">';
+                html += optionsHtml(info.nNuclides, function(i) { return tally.nuclides[i]; });
+                html += '</select></label>';
+            }
+
+            if (info.nScores > 1) {
+                html += '<label>Score: <select id="profileScore" onchange="updateMeshProfile(' + index + ')">';
+                html += optionsHtml(info.nScores, function(i) { return tally.scores[i]; });
+                html += '</select></label>';
+            }
+
+            const volumeAvailable = meshVolumeAvailable(info);
+            html += '<label><input type="checkbox" id="profileNormalize" onchange="updateMeshProfile(' + index + ')"' +
+                (volumeAvailable && isDoseTally(tally) ? ' checked' : '') +
+                (volumeAvailable ? '' : ' disabled') + '> Normalize by volume' +
+                (volumeAvailable ? '' : ' (unavailable)') + '</label>';
+            html += '<label>Scale factor: <input type="number" id="profileScale" value="1" step="any" style="width: 110px;" oninput="updateMeshProfile(' + index + ')"></label>';
+
+            if (isDoseTally(tally)) {
+                html += '<label>Dose unit: <select id="profileDoseMagnitude" onchange="updateMeshProfile(' + index + ')">';
+                html += '<option value="1">pSv</option>';
+                html += '<option value="1e-3">nSv</option>';
+                html += '<option value="1e-6">µSv</option>';
+                html += '<option value="1e-9">mSv</option>';
+                html += '<option value="1e-12">Sv</option>';
+                html += '</select></label>';
+                html += '<label>Per: <select id="profileTimeUnit" onchange="updateMeshProfile(' + index + ')">';
+                html += '<option value="1">s</option>';
+                html += '<option value="60">min</option>';
+                html += '<option value="3600">h</option>';
+                html += '<option value="86400">day</option>';
+                html += '</select></label>';
+            }
+
+            html += '<label>Y-axis scale: <select id="profileYScale" onchange="updateMeshProfile(' + index + ')">';
+            html += '<option value="linear">Linear</option>';
+            html += '<option value="logarithmic">Logarithmic</option>';
+            html += '</select></label>';
+            html += '<button type="button" onclick="exportProfileCsv()">Export CSV</button>';
+            html += '<button type="button" onclick="exportCanvasPng(\\'meshProfileChart\\', meshExportName(\\'1d\\'))">Export PNG</button>';
+            html += '</div>';
+
+            html += '<div class="chart-container"><div class="chart-wrapper"><canvas id="meshProfileChart"></canvas></div></div>';
+            html += '<div class="heatmap-note" id="meshProfileNote"></div>';
+            html += '<h3>Profile Results Data</h3>';
+            html += '<div class="results-table-container">';
+            html += '<table class="results-table"><thead><tr>';
+            html += '<th>Index</th><th>Coordinate</th><th>Mean</th><th>Std Dev</th><th>Rel. Error</th>';
+            html += '</tr></thead><tbody id="meshProfileRows"></tbody></table>';
             html += '</div></div>';
             return html;
         }
@@ -1121,6 +1340,102 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             return isFinite(value) && value >= 0 ? value : 0;
         }
 
+        function selectedFilterBins(info, filterIndex, prefix) {
+            const count = info.binCounts[filterIndex];
+            if (filterIndex === info.meshIdx || count <= 1) return [0];
+            const filter = info.tally.filters[filterIndex];
+            const el = document.getElementById(prefix + 'FilterSel_' + filterIndex);
+            const selected = el ? parseInt(el.value, 10) : 0;
+            if (isParentNuclideFilter(filter) && selected === -1) {
+                return Array.from({ length: count }, function(_, i) { return i; });
+            }
+            return [isFinite(selected) && selected >= 0 ? Math.min(selected, count - 1) : 0];
+        }
+
+        function selectedOptionText(id, fallback) {
+            const el = document.getElementById(id);
+            const option = el && el.options && el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
+            return option ? option.text : fallback;
+        }
+
+        function doseUnitInfo(prefix) {
+            const doseEl = document.getElementById(prefix + 'DoseMagnitude');
+            if (!doseEl) return { factor: 1, label: '' };
+            const timeEl = document.getElementById(prefix + 'TimeUnit');
+            const doseFactor = parseFloat(doseEl.value);
+            const timeFactor = timeEl ? parseFloat(timeEl.value) : 1;
+            const doseLabel = selectedOptionText(prefix + 'DoseMagnitude', 'pSv');
+            const timeLabel = selectedOptionText(prefix + 'TimeUnit', 's');
+            return {
+                factor: (isFinite(doseFactor) ? doseFactor : 1) * (isFinite(timeFactor) ? timeFactor : 1),
+                label: doseLabel + '/' + timeLabel
+            };
+        }
+
+        function readMeshSelection(info, prefix) {
+            const scaleInput = document.getElementById(prefix + 'Scale');
+            const parsedScale = scaleInput ? parseFloat(scaleInput.value) : 1;
+            const scale = isFinite(parsedScale) ? parsedScale : 1;
+            const doseUnit = doseUnitInfo(prefix);
+            const filterBins = info.binCounts.map(function(count, i) {
+                    return selectedFilterBins(info, i, prefix);
+                });
+            let combinedParentCount = 0;
+            info.tally.filters.forEach(function(filter, i) {
+                if (isParentNuclideFilter(filter) && filterBins[i].length > 1) {
+                    combinedParentCount += filterBins[i].length;
+                }
+            });
+            return {
+                filterBins: filterBins,
+                nuclideIdx: info.nNuclides > 1 ? Math.min(selectedIndex(prefix + 'Nuclide'), info.nNuclides - 1) : 0,
+                scoreIdx: info.nScores > 1 ? Math.min(selectedIndex(prefix + 'Score'), info.nScores - 1) : 0,
+                normalize: !!(document.getElementById(prefix + 'Normalize') || {}).checked,
+                displayScale: scale * doseUnit.factor,
+                unitLabel: doseUnit.label,
+                combinedParentCount: combinedParentCount
+            };
+        }
+
+        function meshBinResult(info, idxs, selection) {
+            const meshBin = idxs[0] + info.dims[0] * (idxs[1] + info.dims[1] * idxs[2]);
+            const mean = info.tally.results.mean;
+            const stdDev = info.tally.results.stdDev;
+            let value = 0;
+            let variance = 0;
+
+            function addFilterCombination(filterIndex, flat) {
+                if (filterIndex >= info.binCounts.length) {
+                    const binValue = Number(mean[flat]);
+                    const binError = Number(stdDev[flat]);
+                    value += binValue;
+                    variance += binError * binError;
+                    return;
+                }
+                const bins = filterIndex === info.meshIdx ? [meshBin] : selection.filterBins[filterIndex];
+                bins.forEach(function(bin) {
+                    addFilterCombination(filterIndex + 1, flat + bin * info.strides[filterIndex]);
+                });
+            }
+
+            addFilterCombination(0, selection.nuclideIdx * info.nScores + selection.scoreIdx);
+            let error = Math.sqrt(variance);
+            if (selection.normalize) {
+                const volume = elementVolume(info, idxs);
+                if (isFinite(volume) && volume > 0) {
+                    value /= volume;
+                    error /= volume;
+                } else {
+                    value = NaN;
+                    error = NaN;
+                }
+            }
+            return {
+                value: value * selection.displayScale,
+                error: error * Math.abs(selection.displayScale)
+            };
+        }
+
         function updateMeshSlice(tallyIndex) {
             const info = currentMeshInfo;
             if (!info) return;
@@ -1137,23 +1452,11 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             const axisB = plane.axes[1];
             const normalAxis = plane.normal;
             const sliceIdx = Math.min(selectedIndex('meshSliceIndex'), info.dims[normalAxis] - 1);
-            const normalize = !!(document.getElementById('meshNormalize') || {}).checked;
-            const scaleInput = document.getElementById('meshScale');
-            const parsedScale = scaleInput ? parseFloat(scaleInput.value) : 1;
-            const scale = isFinite(parsedScale) ? parsedScale : 1;
+            const selection = readMeshSelection(info, 'mesh');
             const colorScale = (document.getElementById('meshColorScale') || {}).value || 'linear';
-
-            const filterBins = info.binCounts.map(function(count, i) {
-                if (i === info.meshIdx || count <= 1) return 0;
-                return Math.min(selectedIndex('meshFilterSel_' + i), count - 1);
-            });
-            const nuclideIdx = info.nNuclides > 1 ? Math.min(selectedIndex('meshNuclide'), info.nNuclides - 1) : 0;
-            const scoreIdx = info.nScores > 1 ? Math.min(selectedIndex('meshScore'), info.nScores - 1) : 0;
 
             const nA = info.dims[axisA];
             const nB = info.dims[axisB];
-            const mean = info.tally.results.mean;
-            const stdDev = info.tally.results.stdDev;
 
             const values = [];
             const errors = [];
@@ -1165,30 +1468,9 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                     idxs[axisA] = a;
                     idxs[axisB] = b;
                     idxs[normalAxis] = sliceIdx;
-                    const meshBin = idxs[0] + info.dims[0] * (idxs[1] + info.dims[1] * idxs[2]);
-
-                    let flat = nuclideIdx * info.nScores + scoreIdx;
-                    for (let i = 0; i < info.binCounts.length; i++) {
-                        const bin = (i === info.meshIdx) ? meshBin : filterBins[i];
-                        flat += bin * info.strides[i];
-                    }
-
-                    let value = Number(mean[flat]);
-                    let error = Number(stdDev[flat]);
-                    if (normalize) {
-                        const volume = elementVolume(info, idxs);
-                        if (isFinite(volume) && volume > 0) {
-                            value /= volume;
-                            error /= volume;
-                        } else {
-                            value = NaN;
-                            error = NaN;
-                        }
-                    }
-                    value *= scale;
-                    error *= Math.abs(scale);
-                    rowValues.push(value);
-                    rowErrors.push(error);
+                    const result = meshBinResult(info, idxs, selection);
+                    rowValues.push(result.value);
+                    rowErrors.push(result.error);
                 }
                 values.push(rowValues);
                 errors.push(rowErrors);
@@ -1205,11 +1487,327 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 normalAxis: normalAxis,
                 sliceIdx: sliceIdx,
                 colorScale: colorScale,
-                normalize: normalize
+                normalize: selection.normalize,
+                unitLabel: selection.unitLabel,
+                combinedParentCount: selection.combinedParentCount,
+                zoom: currentHeatmap && currentHeatmap.axisA === axisA && currentHeatmap.axisB === axisB
+                    ? currentHeatmap.zoom : 1,
+                centerA: currentHeatmap && currentHeatmap.axisA === axisA && currentHeatmap.axisB === axisB
+                    ? currentHeatmap.centerA : nA / 2,
+                centerB: currentHeatmap && currentHeatmap.axisA === axisA && currentHeatmap.axisB === axisB
+                    ? currentHeatmap.centerB : nB / 2
             };
 
             drawHeatmap(canvas, currentHeatmap);
             updateMeshStats(currentHeatmap);
+        }
+
+        function selectedProfileAxis(info) {
+            const axis = selectedIndex('profileAxis');
+            return info.profileAxes.indexOf(axis) !== -1 ? axis : info.profileAxes[0];
+        }
+
+        function refreshProfileAxisControls(info) {
+            const profileAxis = selectedProfileAxis(info);
+            for (let axis = 0; axis < info.nAxes; axis++) {
+                const wrapper = document.getElementById('profileFixedWrap_' + axis);
+                if (wrapper) {
+                    wrapper.style.display = axis === profileAxis ? 'none' : '';
+                }
+            }
+        }
+
+        function onMeshProfileAxisChange(tallyIndex) {
+            if (!currentMeshInfo) return;
+            refreshProfileAxisControls(currentMeshInfo);
+            updateMeshProfile(tallyIndex);
+        }
+
+        function updateMeshProfile(tallyIndex) {
+            const info = currentMeshInfo;
+            if (!info) return;
+            const canvas = document.getElementById('meshProfileChart');
+            const rows = document.getElementById('meshProfileRows');
+            if (!canvas || !rows) return;
+
+            refreshProfileAxisControls(info);
+            const profileAxis = selectedProfileAxis(info);
+            const selection = readMeshSelection(info, 'profile');
+            const points = [];
+
+            for (let i = 0; i < info.dims[profileAxis]; i++) {
+                const idxs = [0, 0, 0];
+                for (let axis = 0; axis < info.nAxes; axis++) {
+                    idxs[axis] = axis === profileAxis
+                        ? i
+                        : Math.min(selectedIndex('profileFixed_' + axis), info.dims[axis] - 1);
+                }
+                const result = meshBinResult(info, idxs, selection);
+                const low = elementLow(info.mesh, profileAxis, i, info.dims);
+                const width = elementWidth(info.mesh, profileAxis, i, info.dims);
+                points.push({
+                    index: i,
+                    x: isFinite(low) && isFinite(width) ? low + width / 2 : i + 1,
+                    low: low,
+                    high: isFinite(low) && isFinite(width) ? low + width : NaN,
+                    value: result.value,
+                    error: result.error
+                });
+            }
+
+            const unitSuffix = selection.unitLabel ? ' ' + selection.unitLabel : '';
+            const profileNote = document.getElementById('meshProfileNote');
+            if (profileNote) {
+                let note = selection.normalize
+                    ? 'Values are normalized by mesh element ' + (info.nAxes === 1 ? 'length' : (info.nAxes === 2 ? 'area' : 'volume')) + '.'
+                    : 'Values are not normalized by mesh element size.';
+                if (selection.unitLabel) {
+                    note += ' The scale factor is interpreted as the source rate in particles/s for the selected time unit.';
+                }
+                if (selection.combinedParentCount > 0) {
+                    note += ' Values sum ' + selection.combinedParentCount + ' parent nuclides; standard deviations are combined in quadrature without covariance data.';
+                }
+                profileNote.textContent = note;
+            }
+            rows.innerHTML = points.map(function(point) {
+                const coordinate = isFinite(point.low) && isFinite(point.high)
+                    ? formatCoord(point.x) + ' cm (' + formatCoord(point.low) + ' to ' + formatCoord(point.high) + ')'
+                    : String(point.index + 1);
+                const relError = isFinite(point.value) && point.value !== 0 && isFinite(point.error)
+                    ? (Math.abs(point.error / point.value) * 100).toFixed(2) + '%'
+                    : 'n/a';
+                return '<tr><td>' + (point.index + 1) + '</td><td>' + coordinate + '</td>' +
+                    '<td>' + (isFinite(point.value) ? point.value.toExponential(4) + unitSuffix : 'n/a') + '</td>' +
+                    '<td>' + (isFinite(point.error) ? point.error.toExponential(4) + unitSuffix : 'n/a') + '</td>' +
+                    '<td>' + relError + '</td></tr>';
+            }).join('');
+
+            if (currentProfileChart) {
+                currentProfileChart.destroy();
+            }
+
+            const yScale = (document.getElementById('profileYScale') || {}).value || 'linear';
+            const chartPoints = points.map(function(point) {
+                return {
+                    x: point.x,
+                    y: yScale === 'logarithmic' && point.value <= 0 ? null : point.value
+                };
+            });
+            const fixedParts = [];
+            for (let axis = 0; axis < info.nAxes; axis++) {
+                if (axis === profileAxis) continue;
+                const idx = Math.min(selectedIndex('profileFixed_' + axis), info.dims[axis] - 1);
+                fixedParts.push(axisBinLabel(info, axis, idx));
+            }
+            const title = AXIS_NAMES[profileAxis] + ' line profile' +
+                (fixedParts.length ? ' at ' + fixedParts.join(', ') : '');
+
+            currentProfileChart = new Chart(canvas, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: selection.unitLabel ? 'Mean (' + selection.unitLabel + ')' : 'Mean',
+                        data: chartPoints,
+                        backgroundColor: 'rgba(54, 162, 235, 0.35)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 2,
+                        pointRadius: points.length <= 200 ? 2 : 0,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    parsing: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'nearest'
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: title
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const point = points[context.dataIndex];
+                                    let text = 'Mean: ' + point.value.toExponential(4) + unitSuffix;
+                                    text += ', Std dev: ' + point.error.toExponential(4) + unitSuffix;
+                                    return text;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: {
+                                display: true,
+                                text: AXIS_NAMES[profileAxis] + (isFinite(points[0] && points[0].low) ? ' (cm)' : ' index')
+                            }
+                        },
+                        y: {
+                            type: yScale,
+                            title: {
+                                display: true,
+                                text: selection.unitLabel || 'Value'
+                            }
+                        }
+                    }
+                }
+            });
+            currentProfileData = {
+                info: info,
+                profileAxis: profileAxis,
+                points: points,
+                unitLabel: selection.unitLabel,
+                fixedParts: fixedParts
+            };
+        }
+
+        function csvCell(value) {
+            const text = String(value === undefined || value === null ? '' : value);
+            return /[",\\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+        }
+
+        function meshExportName(kind) {
+            const tally = currentMeshInfo && currentMeshInfo.tally;
+            const id = tally ? tally.id : 'tally';
+            const name = tally && tally.name ? '-' + tally.name : '';
+            return ('tally-' + id + name + '-mesh-' + kind)
+                .replace(/[^a-z0-9._-]+/gi, '-')
+                .replace(/-+/g, '-');
+        }
+
+        function exportCanvasPng(canvasId, fileName) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || typeof canvas.toDataURL !== 'function') return;
+            vscodeApi.postMessage({
+                command: 'exportPlot',
+                format: 'png',
+                fileName: fileName + '.png',
+                data: canvas.toDataURL('image/png')
+            });
+        }
+
+        function exportMeshCsv() {
+            const state = currentHeatmap;
+            if (!state) return;
+            const info = state.info;
+            const headers = [
+                AXIS_NAMES[state.axisA] + ' index',
+                AXIS_NAMES[state.axisA] + ' center (cm)',
+                AXIS_NAMES[state.axisB] + ' index',
+                AXIS_NAMES[state.axisB] + ' center (cm)',
+                AXIS_NAMES[state.normalAxis] + ' index',
+                AXIS_NAMES[state.normalAxis] + ' center (cm)',
+                'Mean' + (state.unitLabel ? ' (' + state.unitLabel + ')' : ''),
+                'Std dev' + (state.unitLabel ? ' (' + state.unitLabel + ')' : ''),
+                'Relative error (%)'
+            ];
+            const lines = [headers.map(csvCell).join(',')];
+            for (let b = 0; b < state.nB; b++) {
+                for (let a = 0; a < state.nA; a++) {
+                    const idxs = [0, 0, 0];
+                    idxs[state.axisA] = a;
+                    idxs[state.axisB] = b;
+                    idxs[state.normalAxis] = state.sliceIdx;
+                    const centers = idxs.map(function(idx, axis) {
+                        const low = elementLow(info.mesh, axis, idx, info.dims);
+                        const width = elementWidth(info.mesh, axis, idx, info.dims);
+                        return isFinite(low) && isFinite(width) ? low + width / 2 : '';
+                    });
+                    const value = state.values[b][a];
+                    const error = state.errors[b][a];
+                    const relative = isFinite(value) && value !== 0 && isFinite(error)
+                        ? Math.abs(error / value) * 100
+                        : '';
+                    lines.push([
+                        a + 1, centers[state.axisA],
+                        b + 1, centers[state.axisB],
+                        state.sliceIdx + 1, centers[state.normalAxis],
+                        value, error, relative
+                    ].map(csvCell).join(','));
+                }
+            }
+            vscodeApi.postMessage({
+                command: 'exportPlot',
+                format: 'csv',
+                fileName: meshExportName('2d') + '.csv',
+                data: lines.join('\\n')
+            });
+        }
+
+        function exportProfileCsv() {
+            const state = currentProfileData;
+            if (!state) return;
+            const axisName = AXIS_NAMES[state.profileAxis];
+            const headers = [
+                axisName + ' index',
+                axisName + ' center (cm)',
+                axisName + ' lower bound (cm)',
+                axisName + ' upper bound (cm)',
+                'Mean' + (state.unitLabel ? ' (' + state.unitLabel + ')' : ''),
+                'Std dev' + (state.unitLabel ? ' (' + state.unitLabel + ')' : ''),
+                'Relative error (%)'
+            ];
+            const lines = [headers.map(csvCell).join(',')];
+            state.points.forEach(function(point) {
+                const relative = isFinite(point.value) && point.value !== 0 && isFinite(point.error)
+                    ? Math.abs(point.error / point.value) * 100
+                    : '';
+                lines.push([
+                    point.index + 1, point.x, point.low, point.high,
+                    point.value, point.error, relative
+                ].map(csvCell).join(','));
+            });
+            if (state.fixedParts.length > 0) {
+                lines.unshift('# Fixed coordinates: ' + state.fixedParts.join('; '));
+            }
+            vscodeApi.postMessage({
+                command: 'exportPlot',
+                format: 'csv',
+                fileName: meshExportName('1d') + '.csv',
+                data: lines.join('\\n')
+            });
+        }
+
+        function zoomMesh(factor, anchorA, anchorB) {
+            if (!currentHeatmap || !isFinite(factor) || factor <= 0) return;
+            const state = currentHeatmap;
+            const oldZoom = state.zoom || 1;
+            const newZoom = Math.max(1, Math.min(64, oldZoom * factor));
+            const oldWidth = state.nA / oldZoom;
+            const oldHeight = state.nB / oldZoom;
+            const newWidth = state.nA / newZoom;
+            const newHeight = state.nB / newZoom;
+            const targetA = isFinite(anchorA) ? anchorA : state.centerA;
+            const targetB = isFinite(anchorB) ? anchorB : state.centerB;
+            state.centerA = targetA + (state.centerA - targetA) * (newWidth / oldWidth);
+            state.centerB = targetB + (state.centerB - targetB) * (newHeight / oldHeight);
+            state.zoom = newZoom;
+            clampMeshViewport(state);
+            const canvas = document.getElementById('meshHeatmap');
+            if (canvas) drawHeatmap(canvas, state);
+            updateMeshStats(state);
+        }
+
+        function resetMeshZoom() {
+            if (!currentHeatmap) return;
+            currentHeatmap.zoom = 1;
+            currentHeatmap.centerA = currentHeatmap.nA / 2;
+            currentHeatmap.centerB = currentHeatmap.nB / 2;
+            const canvas = document.getElementById('meshHeatmap');
+            if (canvas) drawHeatmap(canvas, currentHeatmap);
+            updateMeshStats(currentHeatmap);
+        }
+
+        function clampMeshViewport(state) {
+            const width = state.nA / state.zoom;
+            const height = state.nB / state.zoom;
+            state.centerA = Math.max(width / 2, Math.min(state.nA - width / 2, state.centerA));
+            state.centerB = Math.max(height / 2, Math.min(state.nB - height / 2, state.centerB));
         }
 
         function heatmapRange(state) {
@@ -1278,19 +1876,32 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             const range = heatmapRange(state);
             const logScale = state.colorScale === 'logarithmic';
 
-            const cellW = plotWidth / state.nA;
-            const cellH = plotHeight / state.nB;
+            clampMeshViewport(state);
+            const viewWidth = state.nA / state.zoom;
+            const viewHeight = state.nB / state.zoom;
+            const startA = state.centerA - viewWidth / 2;
+            const endA = state.centerA + viewWidth / 2;
+            const startB = state.centerB - viewHeight / 2;
+            const endB = state.centerB + viewHeight / 2;
+            const cellW = plotWidth / viewWidth;
+            const cellH = plotHeight / viewHeight;
 
             ctx.font = '11px sans-serif';
             ctx.fillStyle = fg;
             ctx.strokeStyle = border;
 
-            for (let b = 0; b < state.nB; b++) {
-                for (let a = 0; a < state.nA; a++) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(margin.left, margin.top, plotWidth, plotHeight);
+            ctx.clip();
+            for (let b = Math.floor(startB); b < Math.ceil(endB); b++) {
+                if (b < 0 || b >= state.nB) continue;
+                for (let a = Math.floor(startA); a < Math.ceil(endA); a++) {
+                    if (a < 0 || a >= state.nA) continue;
                     const fraction = normalizedValue(state.values[b][a], range, logScale);
                     // y is drawn bottom-up so the physical axis increases upwards
-                    const x = margin.left + a * cellW;
-                    const y = margin.top + (state.nB - 1 - b) * cellH;
+                    const x = margin.left + (a - startA) * cellW;
+                    const y = margin.top + (endB - b - 1) * cellH;
                     if (fraction === null) {
                         ctx.fillStyle = 'rgba(128,128,128,0.25)';
                     } else {
@@ -1299,6 +1910,7 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                     ctx.fillRect(x, y, Math.ceil(cellW) + 0.5, Math.ceil(cellH) + 0.5);
                 }
             }
+            ctx.restore();
 
             ctx.strokeStyle = border;
             ctx.strokeRect(margin.left, margin.top, plotWidth, plotHeight);
@@ -1307,13 +1919,11 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             ctx.fillStyle = fg;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            const xTicks = Math.min(6, state.nA);
+            const xTicks = Math.min(6, Math.max(1, Math.ceil(viewWidth)));
             for (let t = 0; t <= xTicks; t++) {
-                const a = Math.round(t * state.nA / xTicks);
-                const x = margin.left + a * cellW;
-                const coord = a < state.nA
-                    ? elementLow(info.mesh, state.axisA, a, info.dims)
-                    : elementLow(info.mesh, state.axisA, state.nA - 1, info.dims) + elementWidth(info.mesh, state.axisA, state.nA - 1, info.dims);
+                const position = startA + t * viewWidth / xTicks;
+                const x = margin.left + t * plotWidth / xTicks;
+                const coord = coordinateAt(info.mesh, state.axisA, position, info.dims);
                 ctx.beginPath();
                 ctx.moveTo(x, margin.top + plotHeight);
                 ctx.lineTo(x, margin.top + plotHeight + 4);
@@ -1323,13 +1933,11 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
 
             ctx.textAlign = 'right';
             ctx.textBaseline = 'middle';
-            const yTicks = Math.min(6, state.nB);
+            const yTicks = Math.min(6, Math.max(1, Math.ceil(viewHeight)));
             for (let t = 0; t <= yTicks; t++) {
-                const b = Math.round(t * state.nB / yTicks);
-                const y = margin.top + plotHeight - b * cellH;
-                const coord = b < state.nB
-                    ? elementLow(info.mesh, state.axisB, b, info.dims)
-                    : elementLow(info.mesh, state.axisB, state.nB - 1, info.dims) + elementWidth(info.mesh, state.axisB, state.nB - 1, info.dims);
+                const position = startB + t * viewHeight / yTicks;
+                const y = margin.top + plotHeight - t * plotHeight / yTicks;
+                const coord = coordinateAt(info.mesh, state.axisB, position, info.dims);
                 ctx.beginPath();
                 ctx.moveTo(margin.left - 4, y);
                 ctx.lineTo(margin.left, y);
@@ -1355,7 +1963,9 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 cellW: cellW,
                 cellH: cellH,
                 width: plotWidth,
-                height: plotHeight
+                height: plotHeight,
+                startA: startA,
+                endB: endB
             };
             attachHeatmapTooltip(canvas, state);
         }
@@ -1409,9 +2019,10 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                     tooltip.style.display = 'none';
                     return;
                 }
-                const a = Math.min(state.nA - 1, Math.floor((x - plot.left) / plot.cellW));
-                const bFromTop = Math.min(state.nB - 1, Math.floor((y - plot.top) / plot.cellH));
-                const b = state.nB - 1 - bFromTop;
+                const a = Math.max(0, Math.min(state.nA - 1,
+                    Math.floor(plot.startA + (x - plot.left) / plot.cellW)));
+                const b = Math.max(0, Math.min(state.nB - 1,
+                    Math.floor(plot.endB - (y - plot.top) / plot.cellH)));
                 const value = state.values[b][a];
                 const error = state.errors[b][a];
                 const info = state.info;
@@ -1429,8 +2040,12 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                         text += AXIS_NAMES[axis] + ': ' + formatCoord(low + width / 2) + ' cm\\n';
                     }
                 }
-                text += 'Value: ' + (isFinite(value) ? value.toExponential(4) : 'n/a') + '\\n';
-                text += 'Std dev: ' + (isFinite(error) ? error.toExponential(4) : 'n/a') + '\\n';
+                const unitSuffix = state.unitLabel ? ' ' + state.unitLabel : '';
+                text += 'Value: ' + (isFinite(value) ? value.toExponential(4) + unitSuffix : 'n/a') + '\\n';
+                text += 'Std dev: ' + (isFinite(error) ? error.toExponential(4) + unitSuffix : 'n/a') + '\\n';
+                if (state.combinedParentCount > 0) {
+                    text += 'Parents: combined ' + state.combinedParentCount + '\\n';
+                }
                 const relError = (isFinite(value) && value !== 0 && isFinite(error)) ? (Math.abs(error / value) * 100).toFixed(2) + '%' : 'n/a';
                 text += 'Rel. error: ' + relError;
 
@@ -1441,6 +2056,19 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             };
             canvas.onmouseleave = function() {
                 tooltip.style.display = 'none';
+            };
+            canvas.onwheel = function(event) {
+                event.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                const plot = state.plot;
+                if (!plot || x < plot.left || x > plot.left + plot.width || y < plot.top || y > plot.top + plot.height) {
+                    return;
+                }
+                const anchorA = plot.startA + (x - plot.left) / plot.cellW;
+                const anchorB = plot.endB - (y - plot.top) / plot.cellH;
+                zoomMesh(event.deltaY < 0 ? 1.25 : 0.8, anchorA, anchorB);
             };
         }
 
@@ -1453,18 +2081,26 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 let html = '';
                 html += '<div>Grid: ' + state.nA + ' x ' + state.nB + '</div>';
                 html += '<div>Slice: ' + AXIS_NAMES[state.normalAxis] + ' index ' + (state.sliceIdx + 1) + ' of ' + info.dims[state.normalAxis] + '</div>';
-                html += '<div>Min: ' + (isFinite(range.min) ? range.min.toExponential(4) : 'n/a') + '</div>';
-                html += '<div>Max: ' + (isFinite(range.max) ? range.max.toExponential(4) : 'n/a') + '</div>';
+                html += '<div>Zoom: ' + state.zoom.toFixed(2) + 'x</div>';
+                const unitSuffix = state.unitLabel ? ' ' + state.unitLabel : '';
+                html += '<div>Min: ' + (isFinite(range.min) ? range.min.toExponential(4) + unitSuffix : 'n/a') + '</div>';
+                html += '<div>Max: ' + (isFinite(range.max) ? range.max.toExponential(4) + unitSuffix : 'n/a') + '</div>';
                 if (state.colorScale === 'logarithmic') {
-                    html += '<div>Min positive: ' + (isFinite(range.minPositive) ? range.minPositive.toExponential(4) : 'n/a') + '</div>';
+                    html += '<div>Min positive: ' + (isFinite(range.minPositive) ? range.minPositive.toExponential(4) + unitSuffix : 'n/a') + '</div>';
                 }
                 stats.innerHTML = html;
             }
             if (note) {
                 const unitSuffix = state.normalize
-                    ? (info.nAxes >= 3 ? ' per cm³' : ' per cm²')
+                    ? (info.nAxes === 1 ? ' per cm' : (info.nAxes === 2 ? ' per cm²' : ' per cm³'))
                     : '';
                 let text = 'Values are tally means' + unitSuffix + ', multiplied by the scale factor.';
+                if (state.unitLabel) {
+                    text += ' Dose values are displayed in ' + state.unitLabel + '; the scale factor is interpreted as the source rate in particles/s.';
+                }
+                if (state.combinedParentCount > 0) {
+                    text += ' Values sum ' + state.combinedParentCount + ' parent nuclides; standard deviations are combined in quadrature without covariance data.';
+                }
                 if (state.colorScale === 'logarithmic') {
                     text += ' Non-positive bins are shown in grey on a logarithmic colour scale.';
                 }
@@ -1479,8 +2115,13 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
                 currentChart.destroy();
                 currentChart = null;
             }
+            if (currentProfileChart) {
+                currentProfileChart.destroy();
+                currentProfileChart = null;
+            }
             currentMeshInfo = null;
             currentHeatmap = null;
+            currentProfileData = null;
         }
         
         function closeModalOnOverlay(event) {
@@ -1559,18 +2200,27 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
         if (count === 0) {
             return 'No results';
         }
-        
-        const validMean = results.mean.filter(v => !isNaN(v) && isFinite(v) && v !== 0);
-        if (validMean.length === 0) {
-            return `${count} values (all zero or invalid)`;
-        }
-        
+
         if (count <= this.RESULT_DISPLAY_THRESHOLD) {
             return results.mean.map(r => r.toExponential(this.RESULT_EXPONENTIAL_PRECISION)).join(', ');
         }
-        
-        const min = Math.min(...validMean);
-        const max = Math.max(...validMean);
+
+        let min = Infinity;
+        let max = -Infinity;
+        for (const value of results.mean) {
+            if (!isNaN(value) && isFinite(value) && value !== 0) {
+                if (value < min) {
+                    min = value;
+                }
+                if (value > max) {
+                    max = value;
+                }
+            }
+        }
+        if (!isFinite(min) || !isFinite(max)) {
+            return `${count} values (all zero or invalid)`;
+        }
+
         return `${count} values (min: ${min.toExponential(this.RESULT_EXPONENTIAL_PRECISION)}, max: ${max.toExponential(this.RESULT_EXPONENTIAL_PRECISION)})`;
     }
 
@@ -1581,5 +2231,18 @@ export class StatepointEditorProvider implements vscode.CustomReadonlyEditorProv
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
+    }
+
+    private sanitizeExportFileName(value: string, fallback: string): string {
+        const name = path.basename(value).replace(/[^a-zA-Z0-9._-]+/g, '-');
+        return name && name !== '.' && name !== '..' ? name : fallback;
+    }
+
+    private decodePngDataUrl(value: string): Uint8Array {
+        const prefix = 'data:image/png;base64,';
+        if (!value.startsWith(prefix)) {
+            throw new Error('invalid PNG data');
+        }
+        return Buffer.from(value.slice(prefix.length), 'base64');
     }
 }
