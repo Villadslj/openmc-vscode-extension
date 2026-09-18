@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 
 export interface DepletionMaterial {
     id: string;
@@ -29,10 +30,13 @@ export interface DepletionData {
      * Atom numbers indexed as [step][materialIndex][nuclideIndex].
      */
     numbers: number[][][];
+    decayConstants: Record<string, number>;
+    activityStatus?: string;
     warnings: string[];
 }
 
 const SECONDS_PER_DAY = 86400;
+const BUNDLED_CHAIN_PATH = path.join(__dirname, '..', 'resources', 'default-chain.xml');
 
 export class DepletionParser {
     private h5wasm: any;
@@ -84,16 +88,22 @@ export class DepletionParser {
             try {
                 const warnings: string[] = [];
 
-                const materials = this.extractMaterials(h5file, warnings);
-                const nuclides = this.extractIndexedGroup(h5file, 'nuclides', 'atom number index');
-                const reactions = this.extractIndexedGroup(h5file, 'reactions', 'index');
-
                 const numberDs = this.getDataset(h5file, 'number');
+                const numberShape: number[] = numberDs ? numberDs.shape : [];
+                const expectedNuclides = numberShape.length > 0
+                    ? numberShape[numberShape.length - 1]
+                    : undefined;
+                const materials = this.extractMaterials(h5file, warnings);
+                const nuclides = this.extractIndexedGroup(
+                    h5file, 'nuclides', 'atom number index', expectedNuclides, warnings);
+                const reactions = this.extractIndexedGroup(h5file, 'reactions', 'index');
+                const activityData = this.extractDecayConstants(nuclides.filter(Boolean));
+
                 let numbers: number[][][] = [];
                 let nSteps = 0;
 
                 if (numberDs) {
-                    const shape: number[] = numberDs.shape;
+                    const shape = numberShape;
                     const flat = this.toNumberArray(numberDs.value);
                     if (shape.length === 4) {
                         // Legacy format: (n_steps, n_stages, n_mats, n_nucs) - use first stage
@@ -123,6 +133,8 @@ export class DepletionParser {
                     reactions,
                     timeSteps,
                     numbers,
+                    decayConstants: activityData.decayConstants,
+                    activityStatus: activityData.status,
                     warnings
                 };
             } finally {
@@ -194,6 +206,90 @@ export class DepletionParser {
         return Array.isArray(value) ? value.join('.') : String(value);
     }
 
+    private extractDecayConstants(nuclides: string[]): {
+        decayConstants: Record<string, number>;
+        status?: string;
+    } {
+        const configuredPath = process.env.OPENMC_CHAIN_FILE;
+        if (configuredPath) {
+            const chainPath = path.resolve(configuredPath);
+            const configured = this.readDecayConstants(chainPath, nuclides);
+            if (!configured.error && (Object.keys(configured.decayConstants).length > 0 || nuclides.length === 0)) {
+                return { decayConstants: configured.decayConstants };
+            }
+
+            const fallback = this.readDecayConstants(BUNDLED_CHAIN_PATH, nuclides);
+            if (Object.keys(fallback.decayConstants).length > 0 || nuclides.length === 0) {
+                const reason = configured.error
+                    ? `Could not read OPENMC_CHAIN_FILE "${configuredPath}": ${configured.error}`
+                    : `OPENMC_CHAIN_FILE "${configuredPath}" did not contain any nuclides from this depletion result.`;
+                return {
+                    decayConstants: fallback.decayConstants,
+                    status: `${reason} Activity is using the bundled simplified ENDF/B-VIII.1 chain; select the calculation's chain for exact results.`
+                };
+            }
+
+            return {
+                decayConstants: {},
+                status: configured.error
+                    ? `Could not read OPENMC_CHAIN_FILE "${configuredPath}": ${configured.error}`
+                    : `OPENMC_CHAIN_FILE "${configuredPath}" did not contain any nuclides from this depletion result.`
+            };
+        }
+
+        const fallback = this.readDecayConstants(BUNDLED_CHAIN_PATH, nuclides);
+        if (Object.keys(fallback.decayConstants).length > 0 || nuclides.length === 0) {
+            return {
+                decayConstants: fallback.decayConstants,
+                status: 'Activity is using the bundled simplified ENDF/B-VIII.1 chain. Set OPENMC_CHAIN_FILE to the calculation\'s chain XML for exact results.'
+            };
+        }
+
+        return {
+            decayConstants: {},
+            status: 'The bundled simplified ENDF/B-VIII.1 chain does not contain these nuclides. Set OPENMC_CHAIN_FILE to the calculation\'s chain XML to view activity.'
+        };
+    }
+
+    private readDecayConstants(chainPath: string, nuclides: string[]): {
+        decayConstants: Record<string, number>;
+        error?: string;
+    } {
+        let xml: string;
+        try {
+            xml = fs.readFileSync(chainPath, 'utf8');
+        } catch (error) {
+            return {
+                decayConstants: {},
+                error: error instanceof Error ? error.message : String(error)
+            };
+        }
+
+        const requested = new Set(nuclides);
+        const decayConstants: Record<string, number> = {};
+        const tagPattern = /<nuclide\b([^>]*)>/g;
+        let match: RegExpExecArray | null;
+        while ((match = tagPattern.exec(xml)) !== null) {
+            const attributes = match[1];
+            const nameMatch = /\bname\s*=\s*["']([^"']+)["']/.exec(attributes);
+            if (!nameMatch || !requested.has(nameMatch[1])) {
+                continue;
+            }
+            const halfLifeMatch = /\bhalf_life\s*=\s*["']([^"']+)["']/.exec(attributes);
+            if (!halfLifeMatch) {
+                // Nuclides without a half-life attribute are stable.
+                decayConstants[nameMatch[1]] = 0;
+                continue;
+            }
+            const halfLife = Number(halfLifeMatch[1]);
+            if (isFinite(halfLife) && halfLife > 0) {
+                decayConstants[nameMatch[1]] = Math.LN2 / halfLife;
+            }
+        }
+
+        return { decayConstants };
+    }
+
     private extractMaterials(h5file: any, warnings: string[]): DepletionMaterial[] {
         const materials: DepletionMaterial[] = [];
         try {
@@ -233,7 +329,13 @@ export class DepletionParser {
      * Reads a group whose members carry an integer index attribute and returns
      * the member names ordered by that index.
      */
-    private extractIndexedGroup(h5file: any, groupName: string, indexAttr: string): string[] {
+    private extractIndexedGroup(
+        h5file: any,
+        groupName: string,
+        indexAttr: string,
+        expectedLength?: number,
+        warnings?: string[]
+    ): string[] {
         const entries: Array<{ name: string, index: number }> = [];
         try {
             const group = h5file.get(groupName);
@@ -257,6 +359,23 @@ export class DepletionParser {
         const ordered: string[] = [];
         for (const entry of entries.sort((a, b) => a.index - b.index)) {
             ordered[entry.index] = entry.name;
+        }
+        if (expectedLength !== undefined) {
+            ordered.length = expectedLength;
+            const missing: number[] = [];
+            for (let i = 0; i < expectedLength; i++) {
+                if (!ordered[i]) {
+                    ordered[i] = `unknown nuclide ${i}`;
+                    missing.push(i);
+                }
+            }
+            if (missing.length > 0 && warnings) {
+                warnings.push(
+                    `The depletion "number" dataset has ${expectedLength} nuclide columns, but ` +
+                    `${missing.length} column${missing.length === 1 ? '' : 's'} had no matching entry in ` +
+                    `the "/${groupName}" index metadata. Placeholder names are shown so those inventories are not hidden.`
+                );
+            }
         }
         return ordered;
     }
