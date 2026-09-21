@@ -26,6 +26,7 @@ This VSCode extension provides a comprehensive viewer for OpenMC statepoint file
 ### 4. Data Visualization
 - **Chart.js Integration**: Bundled locally for security
 - **Bar Charts**: Visualizes tally results (up to 100 data points)
+- **2D Mesh Slice Heatmap**: Custom canvas renderer (no extra dependencies) for mesh tallies, with plane/slice selection, volume normalization, a user scale factor, linear/log colour scale, colour bar and hover tooltips
 - **Scientific Notation**: Proper formatting for nuclear data
 - **Interactive Charts**: Hover to see exact values
 

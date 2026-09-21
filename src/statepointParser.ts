@@ -1,13 +1,26 @@
 import * as fs from 'fs';
 
+export interface MeshInfo {
+    id: number;
+    type?: string;
+    dimension?: number[];
+    lowerLeft?: number[];
+    upperRight?: number[];
+    width?: number[];
+    /** Explicit grids for rectilinear meshes (one array per axis, n+1 edges). */
+    grids?: number[][];
+}
+
 export interface TallyFilter {
     id: number;
     type: string;
-    bins?: number[];
+    bins?: Array<number | string>;
     energyBins?: number[];
     cellBins?: number[];
     meshId?: number;
     numBins?: number;
+    /** Geometry of the mesh referenced by a mesh filter (if resolvable). */
+    mesh?: MeshInfo;
 }
 
 export interface TallyResult {
@@ -77,14 +90,15 @@ export class StatepointParser {
             // Extract general information
             data.generalInfo = this.extractGeneralInfo(h5file);
 
+            // Extract meshes first, so mesh filters can be linked to their geometry
+            data.meshes = this.extractMeshes(h5file);
+            const meshMap = this.buildMeshMap(data.meshes);
+
             // Extract tallies
             // Extract filters first (used by tallies)
-            data.filters = this.extractFilters(h5file);
+            data.filters = this.extractFilters(h5file, meshMap);
 
-            data.tallies = this.extractTallies(h5file, data.filters);
-
-            // Extract meshes
-            data.meshes = this.extractMeshes(h5file);
+            data.tallies = this.extractTallies(h5file, data.filters, this.getNumRealizations(h5file));
 
             // Extract summary statistics
             data.summary = this.extractSummary(h5file);
@@ -178,7 +192,101 @@ export class StatepointParser {
         return info;
     }
 
-    private extractFilters(h5file: any): Record<number, TallyFilter> {
+    private buildMeshMap(meshes: Array<any>): Record<number, MeshInfo> {
+        const map: Record<number, MeshInfo> = {};
+        for (const mesh of meshes) {
+            const id = Number(mesh.id);
+            if (!isFinite(id)) {
+                continue;
+            }
+            const info: MeshInfo = { id };
+            if (mesh.type !== undefined) {
+                info.type = String(mesh.type).trim();
+            }
+            const dimension = this.toNumberArray(mesh.dimension);
+            if (dimension) {
+                info.dimension = dimension;
+            }
+            const lowerLeft = this.toNumberArray(mesh.lower_left);
+            if (lowerLeft) {
+                info.lowerLeft = lowerLeft;
+            }
+            const upperRight = this.toNumberArray(mesh.upper_right);
+            if (upperRight) {
+                info.upperRight = upperRight;
+            }
+            const width = this.toNumberArray(mesh.width);
+            if (width) {
+                info.width = width;
+            }
+
+            // Rectilinear meshes store explicit edges per axis instead of a width
+            const grids = [mesh.x_grid, mesh.y_grid, mesh.z_grid].map(g => this.toNumberArray(g));
+            if (grids.every(g => g !== undefined && g.length > 1)) {
+                info.grids = grids as number[][];
+                if (!info.dimension) {
+                    info.dimension = (grids as number[][]).map(g => g.length - 1);
+                }
+                if (!info.lowerLeft) {
+                    info.lowerLeft = (grids as number[][]).map(g => g[0]);
+                }
+                if (!info.upperRight) {
+                    info.upperRight = (grids as number[][]).map(g => g[g.length - 1]);
+                }
+            }
+
+            // Derive the element width when only the bounds and dimension are known
+            if (!info.width && info.dimension && info.lowerLeft && info.upperRight) {
+                info.width = info.dimension.map((n, i) =>
+                    n > 0 ? (info.upperRight![i] - info.lowerLeft![i]) / n : 0);
+            }
+
+            map[id] = info;
+        }
+        return map;
+    }
+
+    private toNumberArray(value: any): number[] | undefined {
+        if (value === undefined || value === null) {
+            return undefined;
+        }
+        let raw = value;
+        if (raw && raw.buffer) {
+            raw = Array.from(raw);
+        }
+        if (!Array.isArray(raw)) {
+            raw = [raw];
+        }
+        const numbers = raw.map((v: any) => Number(v));
+        if (numbers.some((v: number) => !isFinite(v))) {
+            return undefined;
+        }
+        return numbers;
+    }
+
+    private getNumRealizations(h5file: any): number {
+        try {
+            const ds = h5file.get('n_realizations');
+            if (ds) {
+                let value = ds.value;
+                if (value && value.buffer) {
+                    value = Array.from(value);
+                }
+                if (Array.isArray(value)) {
+                    value = value[0];
+                }
+                const n = Number(value);
+                if (isFinite(n) && n > 0) {
+                    return n;
+                }
+            }
+        } catch (e) {
+            // n_realizations not available
+        }
+        return 1;
+    }
+
+    private extractFilters(h5file: any, meshMap: Record<number, MeshInfo> = {}): Record<number, TallyFilter> {
         const filters: Record<number, TallyFilter> = {};
 
         try {
@@ -236,15 +344,25 @@ export class StatepointParser {
                                 if (binsValue && binsValue.buffer) {
                                     binsValue = Array.from(binsValue);
                                 }
-                                if (Array.isArray(binsValue)) {
-                                    filter.bins = binsValue.map((v: any) => Number(v));
+                                const bins = Array.isArray(binsValue) ? binsValue : [binsValue];
+                                if (binsValue !== undefined && binsValue !== null) {
+                                    filter.bins = bins.map((v: any) =>
+                                        typeof v === 'string' ? v.trim() : Number(v));
                                     // For energy filters, store as energyBins
                                     if (filter.type.toLowerCase().includes('energy')) {
-                                        filter.energyBins = filter.bins;
+                                        filter.energyBins = filter.bins.map(v => Number(v));
                                     }
                                     // For cell filters, store as cellBins
                                     if (filter.type.toLowerCase().includes('cell')) {
-                                        filter.cellBins = filter.bins;
+                                        filter.cellBins = filter.bins.map(v => Number(v));
+                                    }
+                                    // OpenMC stores the referenced mesh ID in the bins
+                                    // dataset for mesh filters.
+                                    if (filter.type.toLowerCase().includes('mesh') && filter.bins.length > 0) {
+                                        filter.meshId = Number(filter.bins[0]);
+                                        if (meshMap[filter.meshId]) {
+                                            filter.mesh = meshMap[filter.meshId];
+                                        }
                                     }
                                 }
                             }
@@ -264,6 +382,9 @@ export class StatepointParser {
                                     meshId = Array.from(meshId)[0];
                                 }
                                 filter.meshId = Number(meshId);
+                                if (meshMap[filter.meshId]) {
+                                    filter.mesh = meshMap[filter.meshId];
+                                }
                             }
                         } catch (e) {
                             // mesh not found
@@ -282,7 +403,7 @@ export class StatepointParser {
         return filters;
     }
 
-    private extractTallies(h5file: any, filtersMap: Record<number, TallyFilter>): TallyData[] {
+    private extractTallies(h5file: any, filtersMap: Record<number, TallyFilter>, numRealizations: number = 1): TallyData[] {
         const tallies: TallyData[] = [];
 
         try {
@@ -415,15 +536,24 @@ export class StatepointParser {
                                     // Calculate mean and std_dev from the results
                                     // OpenMC stores results as: results[filter_bin, score_bin, 0] = sum
                                     //                          results[filter_bin, score_bin, 1] = sum_sq
+                                    // The reported values are the batch mean and the standard
+                                    // deviation of that mean over n_realizations batches.
                                     const totalBins = flatArray.length / 2;
                                     const mean: number[] = [];
                                     const stdDev: number[] = [];
-                                    
+                                    const n = numRealizations > 0 ? numRealizations : 1;
+
                                     for (let i = 0; i < totalBins; i++) {
-                                        const sumVal = flatArray[i * 2];
-                                        const sumSqVal = flatArray[i * 2 + 1];
-                                        mean.push(Number(sumVal));
-                                        stdDev.push(Number(sumSqVal));
+                                        const sumVal = Number(flatArray[i * 2]);
+                                        const sumSqVal = Number(flatArray[i * 2 + 1]);
+                                        const meanVal = sumVal / n;
+                                        mean.push(meanVal);
+                                        if (n > 1) {
+                                            const variance = (sumSqVal / n - meanVal * meanVal) / (n - 1);
+                                            stdDev.push(variance > 0 ? Math.sqrt(variance) : 0);
+                                        } else {
+                                            stdDev.push(0);
+                                        }
                                     }
                                     
                                     tally.results = {
@@ -474,7 +604,12 @@ export class StatepointParser {
                         if (meshGroup.attrs) {
                             for (const attrName of Object.keys(meshGroup.attrs)) {
                                 try {
-                                    mesh[attrName] = meshGroup.attrs[attrName];
+                                    // The group name is the reliable mesh identifier. In
+                                    // h5wasm, the "id" property on attrs can be an internal
+                                    // HDF5 object rather than the OpenMC mesh ID.
+                                    if (attrName !== 'id') {
+                                        mesh[attrName] = meshGroup.attrs[attrName];
+                                    }
                                 } catch (e) {
                                     // Skip attribute
                                 }
@@ -482,7 +617,7 @@ export class StatepointParser {
                         }
 
                         // Try to read common mesh datasets
-                        const datasetsToRead = ['dimension', 'lower_left', 'upper_right', 'width', 'type', 'n_dimension'];
+                        const datasetsToRead = ['dimension', 'lower_left', 'upper_right', 'width', 'type', 'n_dimension', 'x_grid', 'y_grid', 'z_grid'];
                         for (const dsName of datasetsToRead) {
                             try {
                                 const ds = meshGroup.get(dsName);
@@ -491,6 +626,9 @@ export class StatepointParser {
                                     // Convert typed arrays to regular arrays
                                     if (value && value.buffer) {
                                         value = Array.from(value);
+                                    }
+                                    if (dsName === 'type' && Array.isArray(value)) {
+                                        value = value[0];
                                     }
                                     mesh[dsName] = value;
                                 }
