@@ -11,6 +11,11 @@
   "categories": [
     "Other"
   ],
+  "icon": "resources/openmc_community_logo.png",
+  "galleryBanner": {
+    "color": "#A0233A",
+    "theme": "dark"
+  },
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
