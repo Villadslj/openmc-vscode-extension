@@ -2,7 +2,7 @@
   "name": "openmc-vscode-extension",
   "displayName": "OpenMC Statepoint Inspector",
   "description": "VSCode extension for inspecting OpenMC statepoint files",
-  "version": "0.3.0",
+  "version": "0.3.5",
   "publisher": "openmc",
   "engines": {
     "vscode": "^1.108.0",
@@ -76,5 +76,9 @@
   "dependencies": {
     "chart.js": "^4.5.1",
     "h5wasm": "^0.8.11"
+  },
+  "allowScripts": {
+    "@vscode/vsce-sign@2.0.9": true,
+    "keytar": false
   }
 }
